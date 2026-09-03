@@ -5,3 +5,7 @@
 	path = apps/slack
 	url = https://github.com/moxt-ai/app-slack.git
 	branch = main
+[submodule "authentication"]
+	path = authentication
+	url = https://github.com/moxt-ai/authentication.git
+	branch = main
