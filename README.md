@@ -1,9 +1,9 @@
-# Moxt Platform
+# Hosted Mobius
 
-Moxt connects human users and agents across cloud and private environments. The
-platform is built from independent services that share identity and tenant
-boundaries without sharing databases or hardcoding dependencies between Mobius
-and individual applications.
+Hosted Mobius connects human users and agents across cloud and private
+environments. The platform is built from independent services that share
+identity and tenant boundaries without sharing databases or hardcoding
+dependencies between Mobius and individual applications.
 
 ## Repository layout
 

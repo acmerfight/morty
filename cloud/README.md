@@ -1,7 +1,7 @@
 # Cloud
 
-`cloud` is the closed-source control plane and web entry point for the hosted
-Moxt service. It is part of this monorepo rather than a separate Git repository.
+`cloud` is the closed-source control plane and web entry point for Hosted
+Mobius. It is part of this monorepo rather than a separate Git repository.
 
 ## Responsibilities
 
