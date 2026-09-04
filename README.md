@@ -1,32 +1,62 @@
 # Moxt Platform
 
-This monorepo brings together the services and applications that form the Moxt
-platform.
+Moxt connects human users and agents across cloud and private environments. The
+platform is built from independent services that share identity and tenant
+boundaries without sharing databases or hardcoding dependencies between Mobius
+and individual applications.
 
-## Tenants and identities
+## Repository layout
 
-A tenant is both a business boundary and an operational isolation boundary. A
-tenant contains multiple human users and multiple agents.
+- [`authentication`](authentication/) provides human identity.
+- [`mobius`](mobius/) connects and operates agents, provides agent identity, and
+  delivers system prompt contributions.
+- [`apps/slack`](apps/slack/) connects tenants and agents to Slack.
+- [`cloud`](cloud/) is the closed-source web and tenant control plane for the
+  hosted service.
+- Future `app-*` services add more web-based capabilities for agents and humans.
 
-- Human identities are provided by [`authentication`](authentication/).
-- Agent identities are provided by [`mobius`](mobius/).
-- Each application owns the authorization rules for its own business actions.
-- The hosted [`cloud`](cloud/) service manages tenant lifecycle and node
-  placement.
+`authentication`, Mobius, and public applications are included as Git
+submodules. `cloud` is developed directly in this monorepo because it is not an
+open-source service.
 
-Authentication answers "who is this human?" Mobius answers "which agent is
-calling?" An application such as `app-slack` decides what that human or agent is
-allowed to do.
+## Tenants
 
-## Deployment model
+A tenant is both a business boundary and an operational isolation boundary. It
+contains multiple human users and multiple agents.
 
-We deploy nodes in multiple locations around the world. A node runs Mobius and a
-set of applications, such as [`app-slack`](apps/slack/) and future `app-*`
-services. One node can serve multiple tenants.
+Human identities come from `authentication`. Agent identities come from Mobius.
+Each application owns the authorization rules for its own operations. Identity
+answers who is calling; the application decides what that caller may do inside
+the tenant.
 
-Tenants normally remain on the node where they were provisioned. This provides
-local access and limits the impact of a node failure to the tenants served by
-that node.
+Cross-tenant access is not allowed.
+
+## Cloud control plane
+
+The hosted `cloud` service provides the web entry point for human users. It lets
+them:
+
+- View tenants they can access.
+- Create and delete tenants.
+- Select a tenant and open its tenant-specific URL.
+
+`cloud` knows the available nodes and decides which node should serve a newly
+created tenant. After a human selects a tenant, the browser is redirected to the
+tenant's URL. Normal application traffic then goes directly to that node and
+does not pass through `cloud`.
+
+```text
+Human ──> cloud ──> create tenant and select node
+          │
+          └── select tenant
+                  │
+                  └── redirect to tenant URL ──> assigned node
+```
+
+## Nodes
+
+Nodes are deployed in multiple locations around the world. One node can serve
+multiple tenants and can run Mobius, `app-slack`, and other `app-*` services.
 
 ```text
 Node A
@@ -38,118 +68,129 @@ Node A
     └── app-xxx database: Tenant 2
 ```
 
-A node is only a deployment grouping. It is not a business entity and does not
-own a shared list of tenants. Every service keeps its own database and decides
-independently which tenants it serves. Services must not depend on being
-deployed together on the same node.
+A node is only a deployment grouping. It does not own a shared tenant database,
+and services must not depend on being deployed together. Every service keeps
+its own database and independently records which tenants it serves.
 
-## Request routing
+Tenants normally stay on the node where they were provisioned. This supports
+local access and limits a node failure to the tenants served by that node.
 
-There is no central tenant router in the normal request path. The hosted `cloud`
-service records tenant placement so it can manage tenants and redirect humans to
-the correct tenant URL, but application traffic does not pass through it.
+## Request path
 
-Clients learn the correct service endpoint when a tenant or integration is
-provisioned:
+There is no central tenant router in the normal request path. Clients learn the
+correct endpoint during tenant or integration provisioning:
 
-- Human clients select a tenant in `cloud` and are redirected to its assigned
-  URL.
-- A Mobius daemon registers with and reconnects directly to its assigned node.
-- Agent tools call the application endpoint configured for their tenant.
-- A Slack installation is configured with the `app-slack` endpoint on its node.
+- Human browsers are redirected by `cloud` to the tenant URL.
+- Mobius daemons connect directly to their assigned node.
+- Agents call application URLs disclosed through their system prompt.
+- Slack is configured with the `app-slack` endpoint for the tenant's node.
 
-Each service verifies the caller's credential and then checks its own database
-for the tenant. If the request reaches the wrong node, the service reports that
-it does not serve the tenant. It does not look up another node or forward the
-request.
+Each service verifies the caller and checks its own database for the tenant. If
+a request reaches the wrong node, the service returns `TENANT_NOT_SERVED`. It
+does not ask `cloud` to locate another node, forward the request, or migrate the
+tenant.
+
+## Identity and authorization
+
+The platform has three common caller types:
+
+- A human presents a signed identity credential issued by `authentication`.
+- An agent presents a signed identity credential issued by Mobius.
+- An external platform, such as Slack, presents proof defined by its protocol.
+
+Receiving services verify signed human and agent credentials locally. They do
+not call a central identity service for every request.
+
+A valid credential proves identity, not permission. Each application implements
+authorization for its own resources and actions. For example, `app-slack`
+verifies that a request came from Slack and then separately checks whether the
+human or agent represented by the Slack event may perform the requested action.
+
+## Progressive application discovery
+
+Applications expose web services rather than installing local agent tools or
+placing complete API schemas into every agent context.
+
+An application registers a small system prompt contribution with Mobius. The
+contribution tells an agent:
+
+- That the application service exists.
+- Where the service and its detailed API documentation are located.
+- That the agent should use a Mobius-issued identity token when calling it.
+
+Mobius delivers the registered contribution as part of the agent's system
+prompt. The agent decides whether the capability is relevant. Only when needed
+does it read the detailed API documentation and call the service with an HTTP
+client such as `curl`.
 
 ```text
-Request
-  └── assigned node
-      └── target service
-          ├── tenant exists: authenticate, authorize, and handle
-          └── tenant missing: TENANT_NOT_SERVED
+Application
+  └── register short prompt contribution
+          │
+          ▼
+        Mobius ── inject into system prompt ──> Agent
+                                                   │
+                                                   ├── read API when needed
+                                                   ├── obtain agent identity token
+                                                   └── call application directly
 ```
 
-## Credentials and authorization
+This keeps the default context small while still allowing an agent to discover
+and use many services.
 
-The platform accepts three main kinds of callers:
+System prompt registration is generic. Mobius stores and delivers the registered
+content without knowing whether it describes Slack or another application.
+Mobius does not call application APIs, contain their SDKs, or depend on any
+specific `app-*` service.
 
-- A human presents a credential issued by `authentication`.
-- An agent presents a credential issued by Mobius.
-- Slack sends a signed request that is verified by `app-slack`.
-
-Signed human and agent credentials can be verified locally by the receiving
-service. Normal requests do not need to call a central authentication service.
-
-A valid credential proves identity, not permission. After identifying the
-caller, each application applies its own tenant-scoped authorization rules.
-
-For Slack events, `app-slack` first verifies that the request came from Slack and
-then separately checks whether the Slack user or bot in the event may perform
-the requested action.
+The dependency points in the other direction: an application registers its
+prompt contribution with Mobius, hosts its own API documentation, verifies the
+Mobius-issued agent token, and performs its own authorization.
 
 ## State ownership
 
 Every service owns its persistent and temporary state:
 
-| Service | Persistent state |
+| Service | State owned by the service |
 | --- | --- |
-| `authentication` | Human identities, login providers, and human sessions |
-| `cloud` | Hosted nodes, cloud tenant records, placement, URLs, and lifecycle status |
-| `mobius` | Served tenants, agents, daemon registrations, and agent identity data |
-| `app-slack` | Served tenants, Slack installations, identity bindings, permissions, and conversation mappings |
-| `app-*` | Its own tenants and application-specific business data |
+| `authentication` | Human identities, login providers, and sessions |
+| `cloud` | Hosted nodes, tenant placement, tenant URLs, ownership, and lifecycle status |
+| `mobius` | Served tenants, agents, daemon registrations, agent identity, and prompt contributions |
+| `app-slack` | Served tenants, Slack installations, identity bindings, authorization, and conversation mappings |
+| `app-*` | Served tenants and application-specific business data |
 
-Temporary state such as caches, pending messages, event deduplication, locks,
-and online presence is also maintained independently by the service that uses
-it.
-
-There is no cross-service runtime tenant database. `cloud` coordinates hosted
-tenant provisioning, but each service registration is independent and
-retryable.
-
-## Cloud service
-
-The closed-source [`cloud`](cloud/) service provides the hosted web entry point.
-Human users use it to create and delete tenants, view tenants they can access,
-and select a tenant. Selecting a tenant redirects the browser to that tenant's
-URL, after which requests go directly to its node.
-
-`cloud` knows the available nodes and decides where a newly created tenant is
-placed. Nodes run in multiple locations, and each node serves a stable group of
-tenants. Every service on a node continues to own its own database and tenant
-records.
-
-The design provides:
-
-- Local access through geographically distributed nodes.
-- Failure isolation between nodes.
-- Independent scaling of each node and service.
-- No central runtime dependency for tenant request routing.
+There is no cross-service runtime tenant database. `cloud` may coordinate
+hosted provisioning, but each service registration is independent and safe to
+retry. Caches, queues, locks, event deduplication, and online presence are also
+maintained by the service that uses them.
 
 ## Private deployment
 
-A private deployment has exactly one tenant and does not expose multi-tenant
-creation or selection.
+A private deployment has exactly one tenant and does not include the hosted
+`cloud` service. It does not offer tenant creation, tenant selection, or node
+placement.
 
-The single tenant is still represented in credentials, databases, and
+The fixed tenant is still represented in credentials, databases, and
 authorization checks so that cloud and private deployments use the same service
 model.
 
-Human login can be connected to a company's OAuth provider or to Google OAuth.
-`authentication` converts that external login into the same human identity used
-across the platform. Mobius, `app-slack`, and other applications run against the
-private deployment's local databases and services.
+Human login may use a company's OAuth provider or Google OAuth through
+`authentication`. Mobius, `app-slack`, and other applications run against the
+private deployment's local services and databases.
 
 ## Slack integration
 
-[`app-slack`](apps/slack/) connects a tenant to Slack. It:
+`app-slack` is an independent web service that:
 
-- Verifies requests from humans, agents, and Slack servers.
-- Implements Slack-specific authorization.
-- Maps authenticated humans to Slack users.
-- Maps Mobius agents to Slack-facing identities.
-- Routes Slack messages and threads to Mobius.
-- Allows agents to read permitted Slack context.
-- Allows agents to send messages and reactions using their own identity.
+- Authenticates human, agent, and Slack server requests.
+- Implements Slack-specific authorization within a tenant.
+- Maps authenticated humans and Mobius agents to Slack identities.
+- Routes Slack messages and threads to Mobius agents.
+- Publishes its service and API documentation through a Mobius system prompt
+  contribution.
+- Accepts direct API calls from agents using Mobius-issued identity tokens.
+- Allows authorized agents to read Slack context and send messages or reactions
+  using their own identity.
+
+Mobius does not need to know that `app-slack` exists. Removing or adding the
+Slack application does not require a Mobius system-level change.
