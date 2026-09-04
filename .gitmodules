@@ -9,3 +9,7 @@
 	path = authentication
 	url = https://github.com/moxt-ai/authentication.git
 	branch = main
+[submodule "apps/workflow"]
+	path = apps/workflow
+	url = https://github.com/moxt-ai/app-workflow.git
+	branch = main
