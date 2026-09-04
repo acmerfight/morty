@@ -184,60 +184,16 @@ Human login may use a company's OAuth provider or Google OAuth through
 `authentication`. Mobius, `app-slack`, `app-workflow`, and other applications
 run against the private deployment's local services and databases.
 
-## Proactive agentic workflows
+## Applications
 
-`app-workflow` coordinates work among multiple humans and agents. A Workflow
-defines stages and allowed transitions for a kind of work. Each concrete item is
-a Task, which may be completed entirely by humans, assigned to an agent, or
-handed between several humans and agents.
+Applications add user-facing capabilities without expanding Mobius itself:
 
-Agent participation is optional. When proactive execution is useful,
-`app-workflow` adds three capabilities:
+- [`app-slack`](apps/slack/) lets humans talk to agents in Slack and lets agents
+  read or send Slack messages using their own identity.
+- [`app-workflow`](apps/workflow/) coordinates Tasks across humans and agents,
+  and can schedule agents to monitor, react, and keep work moving.
 
-- Schedules wake a selected agent once or repeatedly, with an explicit timezone.
-- Durable workflow state records the objective, current stage, responsibility,
-  activity, attempts, and results.
-- A Watcher periodically reviews unfinished work and can retry, reassign,
-  request an update, or escalate when progress has stopped.
-
-```text
-Humans <──> app-workflow <──> Mobius <──> Agents
-  │              │                           │
-  │              ├── Workflows and Tasks     ├── perform Tasks
-  │              └── schedules and history   └── update state
-  └── perform Tasks and update state
-```
-
-`app-workflow` coordinates responsibility; humans and agents perform the work.
-For example, one human may create a Task and another may complete it without an
-agent. In an automated Workflow, a scheduled agent may inspect GitHub, update
-code, open a pull request, or call `app-slack` to notify a human. Those actions
-use capabilities and credentials available to the agent.
-
-The workflow service does not contain direct integrations for Slack, GitHub,
-email, monitoring systems, or other business platforms. It does not need to
-understand the systems being observed. This keeps it independently useful with
-any sufficiently capable agent and avoids coupling it to other `app-*`
-services.
-
-Like other applications, `app-workflow` registers a concise system prompt
-contribution with Mobius. Agents can discover its service URL and API when they
-need to read or update workflow state. Mobius remains unaware of
-`app-workflow` as a specific product.
-
-## Slack integration
-
-`app-slack` is an independent web service that:
-
-- Authenticates human, agent, and Slack server requests.
-- Implements Slack-specific authorization within a tenant.
-- Maps authenticated humans and Mobius agents to Slack identities.
-- Routes Slack messages and threads to Mobius agents.
-- Publishes its service and API documentation through a Mobius system prompt
-  contribution.
-- Accepts direct API calls from agents using Mobius-issued identity tokens.
-- Allows authorized agents to read Slack context and send messages or reactions
-  using their own identity.
-
-Mobius does not need to know that `app-slack` exists. Removing or adding the
-Slack application does not require a Mobius system-level change.
+Applications expose their capabilities to agents through Mobius system prompt
+contributions. They own their business state and authorization, remain
+independent from one another, and are not dependencies of Mobius. See each
+application's README for its detailed product and architecture specification.
