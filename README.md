@@ -11,6 +11,8 @@ tenant contains multiple human users and multiple agents.
 - Human identities are provided by [`authentication`](authentication/).
 - Agent identities are provided by [`mobius`](mobius/).
 - Each application owns the authorization rules for its own business actions.
+- The hosted [`cloud`](cloud/) service manages tenant lifecycle and node
+  placement.
 
 Authentication answers "who is this human?" Mobius answers "which agent is
 calling?" An application such as `app-slack` decides what that human or agent is
@@ -43,13 +45,15 @@ deployed together on the same node.
 
 ## Request routing
 
-There is no central tenant router in the request path and no central database
-that maps every tenant to a node.
+There is no central tenant router in the normal request path. The hosted `cloud`
+service records tenant placement so it can manage tenants and redirect humans to
+the correct tenant URL, but application traffic does not pass through it.
 
 Clients learn the correct service endpoint when a tenant or integration is
 provisioned:
 
-- Human clients use the endpoint assigned to their tenant.
+- Human clients select a tenant in `cloud` and are redirected to its assigned
+  URL.
 - A Mobius daemon registers with and reconnects directly to its assigned node.
 - Agent tools call the application endpoint configured for their tenant.
 - A Slack installation is configured with the `app-slack` endpoint on its node.
@@ -92,6 +96,7 @@ Every service owns its persistent and temporary state:
 | Service | Persistent state |
 | --- | --- |
 | `authentication` | Human identities, login providers, and human sessions |
+| `cloud` | Hosted nodes, cloud tenant records, placement, URLs, and lifecycle status |
 | `mobius` | Served tenants, agents, daemon registrations, and agent identity data |
 | `app-slack` | Served tenants, Slack installations, identity bindings, permissions, and conversation mappings |
 | `app-*` | Its own tenants and application-specific business data |
@@ -100,14 +105,21 @@ Temporary state such as caches, pending messages, event deduplication, locks,
 and online presence is also maintained independently by the service that uses
 it.
 
-There is no cross-service tenant database. Provisioning may register a tenant
-with several services, but each registration is independent and retryable.
+There is no cross-service runtime tenant database. `cloud` coordinates hosted
+tenant provisioning, but each service registration is independent and
+retryable.
 
 ## Cloud service
 
-The cloud service runs multiple nodes in different locations. Each node serves a
-stable group of tenants, while every service on that node uses and owns its own
-database.
+The closed-source [`cloud`](cloud/) service provides the hosted web entry point.
+Human users use it to create and delete tenants, view tenants they can access,
+and select a tenant. Selecting a tenant redirects the browser to that tenant's
+URL, after which requests go directly to its node.
+
+`cloud` knows the available nodes and decides where a newly created tenant is
+placed. Nodes run in multiple locations, and each node serves a stable group of
+tenants. Every service on a node continues to own its own database and tenant
+records.
 
 The design provides:
 
