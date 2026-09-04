@@ -3,13 +3,9 @@
 	url = https://github.com/moxt-ai/mobius.git
 [submodule "apps/slack"]
 	path = apps/slack
-	url = https://github.com/moxt-ai/app-slack.git
-	branch = main
-[submodule "authentication"]
-	path = authentication
-	url = https://github.com/moxt-ai/authentication.git
+	url = https://github.com/moxt-ai/mobius-slack.git
 	branch = main
 [submodule "apps/workflow"]
 	path = apps/workflow
-	url = https://github.com/moxt-ai/app-workflow.git
+	url = https://github.com/moxt-ai/mobius-workflow.git
 	branch = main

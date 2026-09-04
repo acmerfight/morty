@@ -1,13 +1,13 @@
 # Cloud
 
-`cloud` is the closed-source control plane and web entry point for Hosted
-Mobius. It is part of this monorepo rather than a separate Git repository.
+`cloud` is the closed-source control plane and web entry point for Mobius Cloud.
+It is part of this monorepo rather than a separate Git repository.
 
 ## Responsibilities
 
 The cloud service provides the web UI used by human users to:
 
-- Sign in through `authentication`.
+- Sign in through Clerk.
 - View the tenants they can access.
 - Create a tenant.
 - Delete a tenant.
@@ -34,7 +34,7 @@ Human
 
 When a human creates a tenant, `cloud`:
 
-1. Verifies the human identity from `authentication`.
+1. Verifies the human's Clerk session token.
 2. Authorizes the human to create a tenant.
 3. Selects a node using cloud placement policy.
 4. Creates the cloud tenant record and assigns its tenant URL.

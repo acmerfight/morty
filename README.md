@@ -1,13 +1,12 @@
-# Hosted Mobius
+# Mobius Cloud
 
-Hosted Mobius connects human users and agents across cloud and private
-environments. The platform is built from independent services that share
-identity and tenant boundaries without sharing databases or hardcoding
-dependencies between Mobius and individual applications.
+Mobius Cloud is the hosted, multi-tenant distribution of Mobius. It is built
+from independent services that share identity and tenant boundaries without
+sharing databases or hardcoding dependencies between Mobius and individual
+applications. The same service model also supports private deployments.
 
 ## Repository layout
 
-- [`authentication`](authentication/) provides human identity.
 - [`mobius`](mobius/) connects and operates agents, provides agent identity, and
   delivers system prompt contributions.
 - [`apps/slack`](apps/slack/) connects tenants and agents to Slack.
@@ -17,16 +16,16 @@ dependencies between Mobius and individual applications.
   hosted service.
 - Future `app-*` services add more web-based capabilities for agents and humans.
 
-`authentication`, Mobius, and public applications are included as Git
-submodules. `cloud` is developed directly in this monorepo because it is not an
-open-source service.
+Mobius and public applications are included as Git submodules. `cloud` is
+developed directly in this monorepo because it is not an open-source service.
 
 ## Tenants
 
 A tenant is both a business boundary and an operational isolation boundary. It
 contains multiple human users and multiple agents.
 
-Human identities come from `authentication`. Agent identities come from Mobius.
+Human identities come from [Clerk](https://clerk.com/). Agent identities come
+from Mobius.
 Each application owns the authorization rules for its own operations. Identity
 answers who is calling; the application decides what that caller may do inside
 the tenant.
@@ -99,7 +98,7 @@ tenant.
 
 The platform has three common caller types:
 
-- A human presents a signed identity credential issued by `authentication`.
+- A human presents a signed Clerk session token.
 - An agent presents a signed identity credential issued by Mobius.
 - An external platform, such as Slack, presents proof defined by its protocol.
 
@@ -154,11 +153,11 @@ Mobius-issued agent token, and performs its own authorization.
 
 ## State ownership
 
-Every service owns its persistent and temporary state:
+Clerk owns human accounts, login providers, and sessions. Every Mobius Cloud
+service owns its persistent and temporary state:
 
 | Service | State owned by the service |
 | --- | --- |
-| `authentication` | Human identities, login providers, and sessions |
 | `cloud` | Hosted nodes, tenant placement, tenant URLs, ownership, and lifecycle status |
 | `mobius` | Served tenants, agents, daemon registrations, agent identity, and prompt contributions |
 | `app-slack` | Served tenants, Slack installations, identity bindings, authorization, and conversation mappings |
@@ -180,9 +179,10 @@ The fixed tenant is still represented in credentials, databases, and
 authorization checks so that cloud and private deployments use the same service
 model.
 
-Human login may use a company's OAuth provider or Google OAuth through
-`authentication`. Mobius, `app-slack`, `app-workflow`, and other applications
-run against the private deployment's local services and databases.
+Human login uses Clerk. Enterprise deployments may connect their identity
+provider through Clerk's SAML or OIDC support. Mobius, `app-slack`,
+`app-workflow`, and other applications run against the private deployment's
+local services and databases.
 
 ## Applications
 
