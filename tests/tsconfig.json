@@ -1,7 +1,9 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "types": ["node"]
+    "types": ["node", "vite/client"],
+    "jsx": "react-jsx",
+    "lib": ["es2024", "dom", "dom.iterable"]
   },
   "include": [
     "**/*.ts",
@@ -10,6 +12,10 @@
     "../vitest.config.ts",
     "../worker-configuration.d.ts",
     "../cloud/shared/**/*.ts",
-    "../vite.config.ts"
+    "../vite.config.ts",
+    "**/*.tsx",
+    "../vitest.browser.config.ts",
+    "../cloud/web/**/*.ts",
+    "../cloud/web/**/*.tsx"
   ]
 }

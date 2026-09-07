@@ -66,7 +66,7 @@ test("Given an active signed session, When the user requests their account, Then
   expect(response.headers.get("Cache-Control")).toBe("no-store");
 });
 
-test("Given a user without an active organization, When they request their account, Then their identity does not imply tenant membership", async () => {
+test("Given a user without an active organization, When they request their account, Then their identity does not imply workspace membership", async () => {
   const response = await worker.fetch(
     accountRequest(issuer.createSession("user_personal")),
     configuration,

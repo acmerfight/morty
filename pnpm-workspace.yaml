@@ -2,6 +2,8 @@ engineStrict: true
 minimumReleaseAge: 1440
 
 allowBuilds:
+  bufferutil: false
   esbuild: true
   simple-git-hooks: true
+  utf-8-validate: false
   workerd: true

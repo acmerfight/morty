@@ -65,4 +65,19 @@ fixed clock. No live Clerk account or credentials are required in CI.
 Clerk's hosted sign-in and sign-up flows are checked manually; this project
 does not automate those flows with Playwright. Open the app, confirm both
 account dialogs are available, and verify that an account can sign in, see its
-verified identity, and sign out when manually validating an auth change.
+workspaces, and sign out when manually validating an auth change.
+
+## Workspace browser scenarios
+
+`pnpm test:browser` runs the signed-in workspace UI in Chromium. These scenarios
+cover creation, membership-scoped listing, opening a workspace, deletion
+confirmation, pagination, direct links, and recovery after a provider outage.
+A stateful identity provider is injected at the production `WorkspaceDirectory`
+port; it owns organizations and memberships rather than supplying canned
+responses. The scenarios do not automate Clerk login or registration or require
+remote credentials in CI.
+
+Install Chromium once with `pnpm exec playwright install chromium`. CI installs
+the browser and system dependencies before `pnpm check`. The test clock uses an
+explicit fixed date. Live Clerk adapter checks use a disposable development
+account and must clean up only the resources created for that check.

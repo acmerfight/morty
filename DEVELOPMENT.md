@@ -14,7 +14,7 @@ pnpm check
 `pnpm dev` serves the React app at `http://localhost:5173` and runs its API in
 Cloudflare's local Workers runtime. `pnpm check` generates Worker types, checks
 TypeScript, builds the app and Worker, runs Biome and the English-only file
-check, runs Vitest coverage, and checks unused code and dependencies with Knip.
+check, runs Vitest coverage and workspace browser scenarios, and checks unused code and dependencies with Knip.
 
 ### Clerk configuration
 
@@ -28,7 +28,7 @@ a session token from Clerk and sends it as a Bearer token to `GET /api/session`.
 The Worker verifies the signature, expiry, and authorized party locally using
 Clerk's backend SDK, rejects pending sessions, and returns the user ID, session
 ID, and active organization ID (or null). This proves identity; future business
-endpoints must separately authorize tenant access.
+endpoints must separately authorize workspace access.
 
 No Clerk secret key is needed by this runtime. Never prefix a secret key with
 `VITE_` or commit it. Missing configuration fails closed with HTTP 503; invalid
@@ -47,6 +47,21 @@ the compatibility date. Build output and local Worker state are ignored too.
 The root toolchain owns `cloud/` and the root development files. Submodules
 (`mobius/` and `apps/*`) remain independent and are not installed, linted,
 built, or deployed by this project's CI.
+
+## Workspace UI
+
+A workspace is a Clerk Organization. The browser uses Clerk's authenticated
+Organization API for membership-scoped listing, creation, selection, and deletion.
+Clerk enforces membership and permissions for these operations. Enable Organizations
+and administrator deletion in each instance; organization selection must remain
+optional so new users can reach the workspace list before creating one.
+
+React Router loaders own list and detail requests; route actions own mutations and
+revalidation. Zustand owns only dialog state. Create and dispose the router with the
+Clerk session outside React rendering. Components subscribe and render without
+`useEffect` data fetching. Requests have deadlines and inherit route cancellation.
+The Clerk SDK does not expose HTTP cancellation, so cancellation stops waiting;
+mutations are never automatically retried because their remote result may be unknown.
 
 ## Cloudflare Deployment
 

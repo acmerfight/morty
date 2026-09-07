@@ -1,99 +1,52 @@
 # Cloud
 
-`cloud` is the closed-source control plane and web entry point for Mobius Cloud.
-It is part of this monorepo rather than a separate Git repository.
+`cloud` is the closed-source web entry point for Mobius Cloud. It is developed
+in this repository rather than as a separate Git submodule.
 
-## Responsibilities
+## Workspaces
 
-The cloud service provides the web UI used by human users to:
+A workspace is a Clerk Organization. Clerk owns its ID, name, memberships,
+creation permissions, and deletion permissions; there is no duplicate workspace
+or membership database in Cloud.
 
-- Sign in through Clerk.
-- View the tenants they can access.
-- Create a tenant.
-- Delete a tenant.
-- Select a tenant and open its tenant-specific URL.
+After signing in, users can:
 
-It also owns the hosted service's node inventory and tenant placement logic. When
-a human creates a tenant, `cloud` selects the node that will serve it according
-to cloud business rules such as location, availability, and capacity.
+- View a paginated list of the workspaces they belong to.
+- Create a workspace by entering a name.
+- Open `/workspaces/<organization-id>` to select that workspace and see a blank
+  TODO page. Direct links and browser navigation are supported.
+- Delete a workspace when they have permission, after confirming the deletion.
 
-```text
-Human
-  └── Cloud Web UI
-      ├── create tenant
-      │   ├── select a node
-      │   └── provision the tenant on services at that node
-      └── select tenant
-          └── redirect to the tenant URL
-              └── tenant node
-```
+The React app uses Clerk's authenticated Organization APIs. Listing is scoped
+to the signed-in user's memberships. Opening sets the active Organization;
+Clerk verifies membership. Deletion is enforced by Clerk even if permissions
+change after the list was loaded. Removing a workspace deletes its Organization
+and memberships, not merely the current user's membership.
 
-## Tenant lifecycle
+Clerk Organizations must be enabled in each instance, with membership optional
+(`force_organization_selection: false`) so a user can reach the empty list before
+creating their first workspace. Allow user-created Organizations and admin
+deletion. No Clerk secret key is required in the deployed app.
 
-### Create
+Each operation has a deadline and stops updating the page after navigation or
+sign-out. Clerk's browser SDK does not expose request cancellation: a timed-out
+mutation may still complete remotely. Mutations are never automatically retried;
+refresh the list to reconcile an uncertain result.
 
-When a human creates a tenant, `cloud`:
+## Future integrations
 
-1. Verifies the human's Clerk session token.
-2. Authorizes the human to create a tenant.
-3. Selects a node using cloud placement policy.
-4. Creates the cloud tenant record and assigns its tenant URL.
-5. Provisions the tenant independently in Mobius and the required applications
-   on the selected node.
-6. Shows provisioning progress and reports any service that needs to be retried.
+The workspace TODO page is intentionally blank. Mobius agents and chat history,
+Mobius Slack connections, and additional applications will be integrated here.
+No agent, chat, Slack, or task data is provisioned by this slice.
 
-Provisioning operations must be safe to retry because every service owns its own
-tenant record and database.
+Cloud may later own node inventory, placement, service URLs, and provisioning
+status keyed by the Clerk Organization ID. Each service remains responsible for
+its own business data and workspace authorization. Services deployed together
+do not share a runtime workspace database.
 
-### Open
+When service provisioning is implemented, workspace deletion must coordinate
+cleanup in those services before removing the Organization. Today there are no
+linked service resources to delete.
 
-When a human selects a tenant, `cloud` redirects the browser to the URL recorded
-for that tenant. Requests after the redirect go directly to the tenant's node;
-they do not pass through `cloud`.
-
-### Delete
-
-When an authorized human deletes a tenant, `cloud` starts deletion in each
-service that was provisioned for the tenant. Deletion may be asynchronous, and
-the UI must expose its progress and failures until it completes.
-
-## State owned by cloud
-
-`cloud` keeps only control-plane state needed by the hosted product:
-
-- Known nodes and their public endpoints.
-- Node metadata used by placement policy.
-- Cloud tenant records and human ownership or membership.
-- The node and tenant URL selected for each tenant.
-- Tenant provisioning and deletion status.
-
-This data is not a shared runtime tenant database for a node. Mobius,
-`app-slack`, and every other `app-*` service still keep their own tenant records
-and remain the authority for their own business state.
-
-The fact that these services are deployed on the same node is not part of their
-domain model. `cloud` coordinates their provisioning but does not combine their
-databases or authorization rules.
-
-## Request path
-
-`cloud` is not a proxy or tenant router for normal application traffic.
-
-```text
-Tenant discovery and management:
-Human ──> cloud
-
-Tenant application traffic:
-Human / Agent / Slack ──> tenant node ──> target service
-```
-
-If a request reaches a node whose target service does not contain that tenant,
-the service returns `TENANT_NOT_SERVED`. It does not ask `cloud` to locate or
-forward the request.
-
-## Private deployment
-
-The `cloud` service is specific to the hosted product and is not included in a
-private deployment. A private deployment has one preconfigured tenant, so it
-does not need node placement, tenant creation, tenant selection, or tenant URL
-redirection.
+Private deployments have one fixed workspace and do not require the hosted
+workspace selection or node placement UI.

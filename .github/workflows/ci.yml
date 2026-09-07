@@ -53,6 +53,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Install browser for workspace scenarios
+        run: pnpm exec playwright install --with-deps chromium
+
       - run: pnpm check
 
   deploy:
