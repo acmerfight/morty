@@ -64,6 +64,10 @@ configuration and `.dev.vars`; it is not a deployment target.
 
 ### Account and credentials
 
+The configured account is Paraflow Cloud (`95af7a3d67be8c49b1619544e3ce53c0`).
+Its environment URLs are `https://mobius-cloud-staging.paraflow.workers.dev`
+and `https://mobius-cloud-production.paraflow.workers.dev`.
+
 Run `pnpm exec wrangler login` to authorize local access, then
 `pnpm exec wrangler whoami` to list accessible accounts. Set
 `CLOUDFLARE_ACCOUNT_ID` explicitly when deploying locally to an account with
