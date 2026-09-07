@@ -44,9 +44,10 @@ Worker types are generated from `wrangler.jsonc` into the ignored
 `worker-configuration.d.ts` file. Run `pnpm typegen` after changing bindings or
 the compatibility date. Build output and local Worker state are ignored too.
 
-The root toolchain owns `cloud/` and the root development files. Submodules
-(`mobius/` and `apps/*`) remain independent and are not installed, linted,
-built, or deployed by this project's CI.
+The root toolchain owns `cloud/` and the root development files. Business repositories keep their own checks and SQL files. Cloud CI additionally
+loads pinned Mobius and Slack sources to validate their shared-shard migrations.
+Cloud CD applies those migrations before deploying its own Worker. Existing
+standalone business deployments remain owned by their original repositories.
 
 ## Workspace UI
 
@@ -76,7 +77,8 @@ Pull requests only run checks. Like Mobius, the repository allows automatic
 squash merging after its required checks pass. Enable auto-merge on a reviewed
 pull request to merge it once those requirements are satisfied.
 
-Both CI jobs cache the pnpm store. Browser checks also cache Chromium's headless
+Both CI jobs cache the pnpm store, including business dependencies. Cache keys
+include the root lockfile and pinned business source action. Browser checks also cache Chromium's headless
 shell by operating system, architecture, and Playwright version. Installation
 reuses cached binaries while ensuring system libraries are present on each fresh
 runner. Cache misses download only the headless shell required by the scenarios.
@@ -85,11 +87,14 @@ are not canceled while running. Both Workers serve the app and assets without
 database bindings. Local development uses the default `mobius-cloud-local`
 configuration and `.dev.vars`; it is not a deployment target.
 
-The physical D1 inventory is maintained in `infra/d1-shards.json`. These
+The physical D1 inventory is maintained in `infra/d1-shards.json`; regional R2
+buckets are listed in `infra/r2-buckets.json`. These
 pre-created databases belong to the Cloud deployment infrastructure, but the
 Cloud Worker does not bind them. Business services own their tables and migration
 files. See [the storage contract](docs/storage.md) before connecting a service
-or moving existing data into a shared shard.
+or releasing business migrations to the shared shards. Cloud CD reads its own
+versioned inventory and applies both businesses' migrations before deploying.
+Existing standalone service deployments remain independent.
 
 ### Account and credentials
 
@@ -106,7 +111,7 @@ Create GitHub environments named `staging` and `production`. Configure each:
 
 | Kind | Name | Value |
 | --- | --- | --- |
-| Secret | `CLOUDFLARE_API_TOKEN` | Cloudflare Edit Cloudflare Workers token scoped to the target account |
+| Secret | `CLOUDFLARE_API_TOKEN` | Cloudflare Workers deployment token with D1 Edit, scoped to the target account |
 | Variable | `CLOUDFLARE_ACCOUNT_ID` | Target Cloudflare account ID |
 | Variable | `APP_ORIGIN` | Exact HTTPS origin of that environment, without a trailing slash |
 | Variable | `CLERK_PUBLISHABLE_KEY` | `pk_test_...` for staging, `pk_live_...` for production |
@@ -137,6 +142,18 @@ do not append `--env` to deploy an already built app.
 To release production, run the `CI` workflow manually on `main` and select
 `production`. This repeats all checks before deploying that selected commit.
 Staging deploys automatically when a pull request is merged to `main`.
+Cloud CD builds Cloud, migrates both businesses across every selected shared D1
+shard, then deploys the Cloud Worker. A failed migration prevents deployment.
+It does not deploy existing standalone Mobius or Slack Workers or migrate their
+databases. Their original CI workflows, domains, and storage bindings remain in use.
+
+To update a migration version, update its business submodule commit and the
+corresponding SHA in `.github/actions/business-sources/action.yml` together. CI
+rejects a mismatch. The business repositories expose source-only internal actions
+to the organization, so GitHub can download the pinned revisions using temporary
+scoped tokens without a stored cross-repository PAT. Business CI continues to
+check and deploy its own standalone service independently; Cloud CI verifies the
+new shared-shard migration composition.
 
 For a local release, use `pnpm deploy:staging` or `pnpm deploy:production`
 with `CLOUDFLARE_ACCOUNT_ID` set. Configure the runtime bindings first with

@@ -37,6 +37,34 @@ stores installations, identity bindings, session mappings, event processing, and
 prompt recovery records. Its implementation is maintained on the Slack repository's
 `main` branch.
 
+## Regional R2 buckets
+
+Cloud owns the private R2 buckets in [infra/r2-buckets.json](../infra/r2-buckets.json).
+There is one bucket per environment and region:
+
+| Environment | Region hint | Bucket |
+| --- | --- | --- |
+| Staging | `apac` | `mobius-cloud-staging-apac-objects` |
+| Staging | `wnam` | `mobius-cloud-staging-wnam-objects` |
+| Production | `apac` | `mobius-cloud-production-apac-objects` |
+| Production | `wnam` | `mobius-cloud-production-wnam-objects` |
+
+Multiple D1 shards in one region can use the same R2 bucket. R2 does not impose
+a fixed bucket storage or object-count limit, so adding a D1 shard does not
+require another bucket. Location hints are best effort, not a specific city or
+a mainland-China placement guarantee.
+
+Use business and workspace prefixes when the new buckets are connected:
+`mobius/<workspaceId>/archives/...` and `slack/<workspaceId>/attachments/...`.
+Each business owns its object formats, versioning, and retention rules. Prefixes
+are an ownership convention, not an authorization boundary. Keep buckets private
+and authorize workspace access at the serving Worker before reading or writing.
+
+R2 requires bucket provisioning and bindings, not SQL schema migrations. The four
+buckets are initially empty; existing archive/attachment buckets and bindings
+remain in use until regional runtime routing is implemented. Increasing D1 shard
+count within a region must not force an object copy.
+
 ## Workspace placement
 
 The intended mapping is:
@@ -117,14 +145,14 @@ folder, and `migrations_table: "slack_migrations"`. Both repositories may contai
 verification applied files with this identical name through two configurations
 to one database and confirmed both business tables and both history records.
 
-Each business deploys independently and applies its own migrations across the
-environment's shards before releasing code that requires them. Serialize releases
-of the same business and environment in its CI. Different businesses must not
-change one another's tables, indexes, triggers, or migration histories, and must
-avoid cross-business foreign keys and SQL joins. D1 serializes database work;
-large schema changes still affect every business sharing that shard. Coordinate
-such changes through a scheduled release rather than introducing a new lock
-service by default. GitHub concurrency groups do not coordinate separate repos.
+Cloud CD applies each business's migrations across the selected environment's
+new shared shards before deploying the Cloud Worker. Cloud releases are serialized
+per environment. Existing standalone service deployments and their databases
+remain managed by their original repositories. Different businesses must not
+change one another's tables, indexes, triggers, or migration histories in a shared
+shard, and must avoid cross-business foreign keys and SQL joins. D1 serializes
+database work; large schema changes still affect every business sharing that shard.
+Coordinate these shared-shard changes through Cloud's release.
 
 Use additive, backward-compatible migrations for rolling deployments. Keep old
 code working while shards are upgraded; do not publish code that requires a
@@ -152,7 +180,7 @@ See the [Mobius migration guide](../mobius/docs/d1-migrations.md) and
 
 New shards start from each business's initial SQL migration. There is no legacy
 history adoption, baseline copying, or existing-database conversion. The current
-Worker deployment configurations and database bindings remain unchanged.
+Worker database and object-storage bindings remain unchanged.
 Initializing schema does not assign a workspace or switch runtime traffic, and
 no remote schema application is part of this repository synchronization.
 
@@ -160,6 +188,36 @@ Table ownership is an application convention, not a D1 permission boundary. A
 Worker with a D1 binding can access the whole database. Choose separate databases
 if businesses later require database-enforced separation, independent whole-DB
 restore, or independent capacity. Wrangler migrations support both layouts.
+
+## Release inventory and migration gate
+
+Cloud's `CI` workflow owns releases of the Cloud Worker and migrations on the new
+Cloud-managed shared shards. It selects a Cloud commit, including the D1/R2
+inventories and pinned Mobius and Slack migration revisions. Both business
+repositories expose a source-only internal action; GitHub downloads it with a
+temporary scoped token. `.github/actions/business-sources` checks the action SHAs
+against Cloud's submodules and installs the migration dependencies. Update both
+pins together when selecting a new business version.
+
+Pull requests apply both businesses' migrations locally to all staging and
+production shards using the same local database state for both businesses.
+Cloud CD builds its own Worker first, then applies both
+businesses' SQL to every shard in the selected environment with `--remote`, then
+deploys Cloud. A migration failure stops deployment. The complete sequence is
+serialized per environment with cancellation disabled for a running release;
+migrations already applied remain recorded if a later shard fails. Use
+backward-compatible SQL so an incomplete migration rollout can be resumed.
+
+Main pushes release Cloud staging; manual dispatch on main selects staging or
+production. Existing standalone deployments, including `mobius-relay.paraflow.biz`
+and Slack staging, retain their original workflows, domains, and storage. Cloud
+CD neither deploys those Workers nor migrates their databases. Updating the
+shared-shard migration source pin does not change a standalone deployment target.
+
+Cloud's Worker still has no D1 binding or SQL schema. Its CD invokes the migration
+commands owned by each business. R2 has no SQL migration step: Cloud provisions
+its buckets, and businesses bind them when runtime routing is ready. There is
+no copying or adoption of old database histories.
 
 ## Capacity and relocation
 
@@ -197,3 +255,7 @@ still an option for an unusually large or isolated workspace.
 - [D1 read replication](https://developers.cloudflare.com/d1/best-practices/read-replication/)
 - [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/)
 - [Clerk Organization metadata](https://clerk.com/docs/guides/organizations/metadata)
+
+- [R2 data location](https://developers.cloudflare.com/r2/reference/data-location/)
+- [R2 limits](https://developers.cloudflare.com/r2/platform/limits/)
+- [Sharing internal GitHub Actions](https://docs.github.com/en/actions/how-tos/reuse-automations/share-with-your-organization)
