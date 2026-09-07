@@ -1,7 +1,7 @@
 # Mobius Cloud
 
-Mobius Cloud is the hosted, multi-tenant distribution of Mobius. It is built
-from independent services that share identity and tenant boundaries without
+Mobius Cloud is the hosted, multi-workspace distribution of Mobius. It is built
+from independent services that share identity and workspace boundaries without
 sharing databases or hardcoding dependencies between Mobius and individual
 applications. The same service model also supports private deployments.
 
@@ -9,10 +9,10 @@ applications. The same service model also supports private deployments.
 
 - [`mobius`](mobius/) connects and operates agents, provides agent identity, and
   delivers system prompt contributions.
-- [`apps/slack`](apps/slack/) connects tenants and agents to Slack.
+- [`apps/slack`](apps/slack/) connects workspaces and agents to Slack.
 - [`apps/workflow`](apps/workflow/) coordinates Tasks across humans and agents,
   with optional scheduling and proactive supervision.
-- [`cloud`](cloud/) is the closed-source web and tenant control plane for the
+- [`cloud`](cloud/) is the closed-source web and workspace control plane for the
   hosted service.
 - Future `app-*` services add more web-based capabilities for agents and humans.
 
@@ -35,88 +35,91 @@ pnpm check
 The web app uses React 19, TypeScript, Vite, and Tailwind CSS 4. Clerk provides
 sign-up, sign-in, profile management, and sign-out. The Worker verifies signed
 session tokens locally before returning the current account. Authentication
-state is owned by Clerk; there is no application state store or database yet.
+state is owned by Clerk. React Router loaders and actions manage workspace data;
+Zustand stores dialog state. There is no application database yet.
 
 Copy `.dev.vars.example` to `.dev.vars` and fill in your Clerk configuration
 before running the app at `http://localhost:5173`. See
 [DEVELOPMENT.md](DEVELOPMENT.md) for configuration and deployment, and
-[TESTING.md](TESTING.md) for testing requirements. Tenant management and the
-remaining product architecture below are planned behavior.
+[TESTING.md](TESTING.md) for testing requirements. Signed-in users can list,
+create, delete, and open their workspaces. Each workspace opens a blank TODO page. Node placement and the remaining service
+integrations described below are planned behavior.
 
-## Tenants
+## Workspaces
 
-A tenant is both a business boundary and an operational isolation boundary. It
-contains multiple human users and multiple agents.
+A workspace is a Clerk Organization. Its ID is the Clerk Organization ID, and
+Clerk owns its membership and permissions. It is the business and operational
+isolation boundary for multiple human users and, in future integrations, agents.
 
 Human identities come from [Clerk](https://clerk.com/). Agent identities come
 from Mobius.
 Each application owns the authorization rules for its own operations. Identity
 answers who is calling; the application decides what that caller may do inside
-the tenant.
+the workspace.
 
-Cross-tenant access is not allowed.
+Cross-workspace access is not allowed.
 
 ## Cloud control plane
 
 The hosted `cloud` service provides the web entry point for human users. It lets
 them:
 
-- View tenants they can access.
-- Create and delete tenants.
-- Select a tenant and open its tenant-specific URL.
+- View workspaces they can access.
+- Create workspaces and delete workspaces they have permission to manage.
+- Open a workspace at `/workspaces/<organization-id>` and see its blank TODO page.
 
-`cloud` knows the available nodes and decides which node should serve a newly
-created tenant. After a human selects a tenant, the browser is redirected to the
-tenant's URL. Normal application traffic then goes directly to that node and
+In the planned service integration, `cloud` will know available nodes and decide
+which node should serve a newly created workspace. After a human selects a workspace, the browser is redirected to the
+workspace's URL. Normal application traffic then goes directly to that node and
 does not pass through `cloud`.
 
 ```text
-Human ──> cloud ──> create tenant and select node
+Human ──> cloud ──> create workspace and select node
           │
-          └── select tenant
+          └── select workspace
                   │
-                  └── redirect to tenant URL ──> assigned node
+                  └── redirect to workspace URL ──> assigned node
 ```
 
 ## Nodes
 
 Nodes are deployed in multiple locations around the world. One node can serve
-multiple tenants and can run Mobius, `app-slack`, `app-workflow`, and other
+multiple workspaces and can run Mobius, `app-slack`, `app-workflow`, and other
 `app-*` services.
 
 ```text
 Node A
 ├── Mobius
-│   └── Mobius database: Tenant 1, Tenant 2
+│   └── Mobius database: Workspace 1, Workspace 2
 ├── app-slack
-│   └── app-slack database: Tenant 1
+│   └── app-slack database: Workspace 1
 ├── app-workflow
-│   └── app-workflow database: Tenant 1, Tenant 2
+│   └── app-workflow database: Workspace 1, Workspace 2
 └── app-xxx
-    └── app-xxx database: Tenant 2
+    └── app-xxx database: Workspace 2
 ```
 
-A node is only a deployment grouping. It does not own a shared tenant database,
+A node is only a deployment grouping. It does not own a shared workspace database,
 and services must not depend on being deployed together. Every service keeps
-its own database and independently records which tenants it serves.
+its own database and independently records which workspaces it serves.
 
-Tenants normally stay on the node where they were provisioned. This supports
-local access and limits a node failure to the tenants served by that node.
+Workspaces normally stay on the node where they were provisioned. This supports
+local access and limits a node failure to the workspaces served by that node.
 
 ## Request path
 
-There is no central tenant router in the normal request path. Clients learn the
-correct endpoint during tenant or integration provisioning:
+There is no central workspace router in the normal request path. Clients learn the
+correct endpoint during workspace or integration provisioning:
 
-- Human browsers are redirected by `cloud` to the tenant URL.
+- Human browsers are redirected by `cloud` to the workspace URL.
 - Mobius daemons connect directly to their assigned node.
 - Agents call application URLs disclosed through their system prompt.
-- Slack is configured with the `app-slack` endpoint for the tenant's node.
+- Slack is configured with the `app-slack` endpoint for the workspace's node.
 
-Each service verifies the caller and checks its own database for the tenant. If
-a request reaches the wrong node, the service returns `TENANT_NOT_SERVED`. It
+Each service verifies the caller and checks its own database for the workspace. If
+a request reaches the wrong node, the service returns `WORKSPACE_NOT_SERVED`. It
 does not ask `cloud` to locate another node, forward the request, or migrate the
-tenant.
+workspace.
 
 ## Identity and authorization
 
@@ -177,29 +180,30 @@ Mobius-issued agent token, and performs its own authorization.
 
 ## State ownership
 
-Clerk owns human accounts, login providers, and sessions. Every Mobius Cloud
+Clerk owns human accounts, login providers, sessions, workspaces (Organizations),
+and workspace membership. Every Mobius Cloud
 service owns its persistent and temporary state:
 
 | Service | State owned by the service |
 | --- | --- |
-| `cloud` | Hosted nodes, tenant placement, tenant URLs, ownership, and lifecycle status |
-| `mobius` | Served tenants, agents, daemon registrations, agent identity, and prompt contributions |
-| `app-slack` | Served tenants, Slack installations, identity bindings, authorization, and conversation mappings |
-| `app-workflow` | Served tenants, workflows, work items, schedules, execution history, and supervision state |
-| `app-*` | Served tenants and application-specific business data |
+| `cloud` | Workspace UI; future hosted nodes, placement, service URLs, and provisioning status |
+| `mobius` | Served workspaces, agents, daemon registrations, agent identity, and prompt contributions |
+| `app-slack` | Served workspaces, Slack installations, identity bindings, authorization, and conversation mappings |
+| `app-workflow` | Served workspaces, workflows, work items, schedules, execution history, and supervision state |
+| `app-*` | Served workspaces and application-specific business data |
 
-There is no cross-service runtime tenant database. `cloud` may coordinate
+There is no cross-service runtime workspace database. `cloud` may coordinate
 hosted provisioning, but each service registration is independent and safe to
 retry. Caches, queues, locks, event deduplication, and online presence are also
 maintained by the service that uses them.
 
 ## Private deployment
 
-A private deployment has exactly one tenant and does not include the hosted
-`cloud` service. It does not offer tenant creation, tenant selection, or node
+A private deployment has exactly one workspace and does not include the hosted
+`cloud` service. It does not offer workspace creation, workspace selection, or node
 placement.
 
-The fixed tenant is still represented in credentials, databases, and
+The fixed workspace is still represented in credentials, databases, and
 authorization checks so that cloud and private deployments use the same service
 model.
 

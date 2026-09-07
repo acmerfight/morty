@@ -13,5 +13,3 @@ export const sessionSchema = z
     organizationId: z.string().min(1).nullable(),
   })
   .readonly();
-
-export type Session = z.infer<typeof sessionSchema>;
