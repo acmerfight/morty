@@ -32,10 +32,16 @@ pnpm dev
 pnpm check
 ```
 
-The initial Worker returns an empty `204 No Content` response. It has no business
-features, authentication, or database bindings. See [DEVELOPMENT.md](DEVELOPMENT.md)
-for the toolchain and deployment setup, and [TESTING.md](TESTING.md) for testing
-requirements. The product architecture below describes the intended behavior.
+The web app uses React 19, TypeScript, Vite, and Tailwind CSS 4. Clerk provides
+sign-up, sign-in, profile management, and sign-out. The Worker verifies signed
+session tokens locally before returning the current account. Authentication
+state is owned by Clerk; there is no application state store or database yet.
+
+Copy `.dev.vars.example` to `.dev.vars` and fill in your Clerk configuration
+before running the app at `http://localhost:5173`. See
+[DEVELOPMENT.md](DEVELOPMENT.md) for configuration and deployment, and
+[TESTING.md](TESTING.md) for testing requirements. Tenant management and the
+remaining product architecture below are planned behavior.
 
 ## Tenants
 

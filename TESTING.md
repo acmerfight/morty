@@ -55,3 +55,14 @@ Do not use real sleeps, polling delays, implicit `Date.now()` values, or timing 
 For an operation that owns resources, test observable cleanup after success, failure, timeout, and cancellation when those outcomes are reachable. Retry tests must prove the attempt limit, cancellation during backoff, and the rule that unsafe or indeterminate operations are not retried. Error-contract tests assert stable codes and sanitized boundary messages, not incidental infrastructure wording.
 
 Coverage identifies untested code but does not decide which tests to write. Do not create impossible typed states or duplicate tests merely to increase coverage. If a branch is unreachable under current invariants, remove or simplify it. Cover critical user paths with end-to-end tests and protocol or external boundaries with integration or contract tests.
+
+## Authentication verification
+
+Run `pnpm test` for the Worker HTTP contract scenarios. They use an in-memory
+identity provider that issues real RSA-signed session tokens, with an explicit
+fixed clock. No live Clerk account or credentials are required in CI.
+
+Clerk's hosted sign-in and sign-up flows are checked manually; this project
+does not automate those flows with Playwright. Open the app, confirm both
+account dialogs are available, and verify that an account can sign in, see its
+verified identity, and sign out when manually validating an auth change.

@@ -9,9 +9,9 @@
     "pnpm": ">=11.25.0 <12"
   },
   "scripts": {
-    "dev": "wrangler dev",
-    "build": "wrangler deploy --dry-run --outdir dist",
-    "typecheck": "pnpm typegen && tsc --project tests/tsconfig.json",
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "pnpm typegen && tsc --project tests/tsconfig.json && tsc --project cloud/web/tsconfig.json",
     "check:no-chinese": "node scripts/check-no-chinese.ts",
     "lint": "biome ci --error-on-warnings && pnpm check:no-chinese",
     "lint:fix": "biome check --write --error-on-warnings && pnpm check:no-chinese",
@@ -24,19 +24,34 @@
     "check": "pnpm typecheck && pnpm build && pnpm lint && pnpm test:coverage && pnpm knip",
     "postinstall": "simple-git-hooks",
     "typegen": "wrangler types worker-configuration.d.ts",
-    "deploy": "wrangler deploy"
+    "deploy": "pnpm build && wrangler deploy",
+    "preview": "vite preview"
   },
   "simple-git-hooks": {
     "pre-commit": "pnpm typecheck && pnpm check:no-chinese && pnpm biome check --staged --files-ignore-unknown=true --no-errors-on-unmatched"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.9",
+    "@cloudflare/vite-plugin": "1.54.4",
+    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
     "@vitest/coverage-v8": "^4.1.10",
     "knip": "^6.32.2",
     "simple-git-hooks": "^2.13.1",
+    "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
+    "vite": "^8.2.2",
     "vitest": "^4.1.10",
     "wrangler": "4.129.0"
+  },
+  "dependencies": {
+    "@clerk/backend": "3.17.1",
+    "@clerk/react": "6.15.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zod": "^4.5.4"
   }
 }

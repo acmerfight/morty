@@ -10,3 +10,6 @@ coverage/
 .dev.vars
 .dev.vars.*
 worker-configuration.d.ts
+test-results/
+playwright-report/
+!/.dev.vars.example

@@ -8,6 +8,8 @@
     "../scripts/**/*.ts",
     "../cloud/src/**/*.ts",
     "../vitest.config.ts",
-    "../worker-configuration.d.ts"
+    "../worker-configuration.d.ts",
+    "../cloud/shared/**/*.ts",
+    "../vite.config.ts"
   ]
 }
