@@ -13,11 +13,25 @@
   "env": {
     "staging": {
       "name": "mobius-cloud-staging",
-      "vars": {}
+      "vars": {},
+      "routes": [
+        {
+          "pattern": "mobius.paradev.biz",
+          "custom_domain": true
+        }
+      ],
+      "workers_dev": false
     },
     "production": {
       "name": "mobius-cloud-production",
-      "vars": {}
+      "vars": {},
+      "routes": [
+        {
+          "pattern": "mobius.paraflow.biz",
+          "custom_domain": true
+        }
+      ],
+      "workers_dev": false
     }
   },
   "account_id": "95af7a3d67be8c49b1619544e3ce53c0"
