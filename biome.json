@@ -14,7 +14,9 @@
       "!!**/.wrangler",
       "!!mobius",
       "!!apps",
-      "!!worker-configuration.d.ts"
+      "!!worker-configuration.d.ts",
+      "!!**/test-results",
+      "!!**/playwright-report"
     ]
   },
   "linter": {
@@ -37,5 +39,10 @@
     "enabled": true,
     "indentStyle": "space",
     "indentWidth": 2
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
   }
 }

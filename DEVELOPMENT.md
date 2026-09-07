@@ -11,11 +11,37 @@ pnpm dev
 pnpm check
 ```
 
-`pnpm dev` starts a local Cloudflare Workers runtime. The empty Worker responds
-with `204 No Content`. `pnpm check` generates Worker runtime types, checks
-TypeScript, bundles a dry-run deployment, runs Biome and the English-only file
+`pnpm dev` serves the React app at `http://localhost:5173` and runs its API in
+Cloudflare's local Workers runtime. `pnpm check` generates Worker types, checks
+TypeScript, builds the app and Worker, runs Biome and the English-only file
 check, runs Vitest coverage, and checks unused code and dependencies with Knip.
-There are no tests yet because this commit only initializes scaffolding.
+
+### Clerk configuration
+
+Copy `.dev.vars.example` to `.dev.vars`. Set `CLERK_PUBLISHABLE_KEY` to the
+Clerk publishable key and `CLERK_JWT_KEY` to the PEM public key from the same
+Clerk instance. Encode PEM line breaks as `\n` inside a quoted value. Set
+`APP_ORIGIN` to the exact browser origin, without a trailing slash.
+
+The browser reads only the publishable key from `GET /api/config`. It obtains
+a session token from Clerk and sends it as a Bearer token to `GET /api/session`.
+The Worker verifies the signature, expiry, and authorized party locally using
+Clerk's backend SDK, rejects pending sessions, and returns the user ID, session
+ID, and active organization ID (or null). This proves identity; future business
+endpoints must separately authorize tenant access.
+
+No Clerk secret key is needed by this runtime. Never prefix a secret key with
+`VITE_` or commit it. Missing configuration fails closed with HTTP 503; invalid
+or missing session tokens receive HTTP 401. Keep the configured JWT public key
+in sync when Clerk rotates signing keys. Local verification does not check
+server-side revocation on every request; tokens remain valid until expiry.
+
+For the deployed Worker, set `CLERK_PUBLISHABLE_KEY` and `CLERK_JWT_KEY` with
+`pnpm exec wrangler secret put NAME --config wrangler.jsonc` and keep
+`APP_ORIGIN` in `wrangler.jsonc` aligned with the deployed URL. These two values
+are public credentials but are stored as bindings to keep instance settings
+out of the source tree. Use a Clerk production instance for a production launch;
+development keys are for development and preview use.
 
 Worker types are generated from `wrangler.jsonc` into the ignored
 `worker-configuration.d.ts` file. Run `pnpm typegen` after changing bindings or
@@ -27,7 +53,7 @@ built, or deployed by this project's CI.
 
 ## Cloudflare Deployment
 
-The Worker is named `mobius-cloud`. This scaffold uses only Workers compute and
+The Worker is named `mobius-cloud`. The app uses Workers compute and static assets and
 has no D1, KV, Durable Object, or other database bindings.
 
 For local deployment:
@@ -57,7 +83,7 @@ gh variable set CLOUDFLARE_ACCOUNT_ID --repo moxt-ai/mobius-cloud --body YOUR_AC
 
 Local Wrangler OAuth credentials are separate from the CI token. Keep credentials
 in the system credential store or GitHub secrets, never in tracked files.
-Business configuration and Clerk integration will be added in later changes.
+Clerk bindings are configured separately from the CI deployment credentials.
 
 
 ## Execution Boundary
