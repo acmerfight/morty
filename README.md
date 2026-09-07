@@ -19,6 +19,24 @@ applications. The same service model also supports private deployments.
 Mobius and public applications are included as Git submodules. `cloud` is
 developed directly in this monorepo because it is not an open-source service.
 
+## Development
+
+The root project builds and deploys the `cloud` Worker. The Git submodules are
+independent projects with their own dependencies and checks.
+
+Requires Node.js 24.20.0 and pnpm 11.25.0.
+
+```bash
+pnpm install
+pnpm dev
+pnpm check
+```
+
+The initial Worker returns an empty `204 No Content` response. It has no business
+features, authentication, or database bindings. See [DEVELOPMENT.md](DEVELOPMENT.md)
+for the toolchain and deployment setup, and [TESTING.md](TESTING.md) for testing
+requirements. The product architecture below describes the intended behavior.
+
 ## Tenants
 
 A tenant is both a business boundary and an operational isolation boundary. It
