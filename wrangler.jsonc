@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "mobius-cloud",
+  "name": "mobius-cloud-local",
   "main": "cloud/src/index.ts",
   "compatibility_date": "2026-09-07",
   "workers_dev": true,
@@ -10,7 +10,14 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
   },
-  "vars": {
-    "APP_ORIGIN": "https://mobius-cloud.taowen.workers.dev"
+  "env": {
+    "staging": {
+      "name": "mobius-cloud-staging",
+      "vars": {}
+    },
+    "production": {
+      "name": "mobius-cloud-production",
+      "vars": {}
+    }
   }
 }

@@ -24,8 +24,11 @@
     "check": "pnpm typecheck && pnpm build && pnpm lint && pnpm test:coverage && pnpm knip",
     "postinstall": "simple-git-hooks",
     "typegen": "wrangler types worker-configuration.d.ts",
-    "deploy": "pnpm build && wrangler deploy",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:staging": "CLOUDFLARE_ENV=staging vite build",
+    "build:production": "CLOUDFLARE_ENV=production vite build",
+    "deploy:staging": "pnpm build:staging && wrangler deploy",
+    "deploy:production": "pnpm build:production && wrangler deploy"
   },
   "simple-git-hooks": {
     "pre-commit": "pnpm typecheck && pnpm check:no-chinese && pnpm biome check --staged --files-ignore-unknown=true --no-errors-on-unmatched"
