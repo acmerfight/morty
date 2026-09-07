@@ -36,12 +36,9 @@ or missing session tokens receive HTTP 401. Keep the configured JWT public key
 in sync when Clerk rotates signing keys. Local verification does not check
 server-side revocation on every request; tokens remain valid until expiry.
 
-For the deployed Worker, set `CLERK_PUBLISHABLE_KEY` and `CLERK_JWT_KEY` with
-`pnpm exec wrangler secret put NAME --config wrangler.jsonc` and keep
-`APP_ORIGIN` in `wrangler.jsonc` aligned with the deployed URL. These two values
-are public credentials but are stored as bindings to keep instance settings
-out of the source tree. Use a Clerk production instance for a production launch;
-development keys are for development and preview use.
+Deployed Clerk configuration is scoped to each GitHub environment as described
+below. Staging requires a Clerk development instance; production requires a
+separate production instance. Never reuse development keys in production.
 
 Worker types are generated from `wrangler.jsonc` into the ignored
 `worker-configuration.d.ts` file. Run `pnpm typegen` after changing bindings or
@@ -53,37 +50,71 @@ built, or deployed by this project's CI.
 
 ## Cloudflare Deployment
 
-The Worker is named `mobius-cloud`. The app uses Workers compute and static assets and
-has no D1, KV, Durable Object, or other database bindings.
+Deployment uses two isolated Workers:
 
-For local deployment:
+| Environment | Worker | Trigger |
+| --- | --- | --- |
+| `staging` | `mobius-cloud-staging` | Successful checks after a push to `main`, or manual dispatch |
+| `production` | `mobius-cloud-production` | Manual CI dispatch selecting `production` from `main` |
+
+Pull requests only run checks. Deployments are serialized per environment and
+are not canceled while running. Both Workers serve the app and assets without
+database bindings. Local development uses the default `mobius-cloud-local`
+configuration and `.dev.vars`; it is not a deployment target.
+
+### Account and credentials
+
+The configured account is Paraflow Cloud (`95af7a3d67be8c49b1619544e3ce53c0`).
+Its environment URLs are `https://mobius.paradev.biz`
+and `https://mobius.paraflow.biz`.
+
+Run `pnpm exec wrangler login` to authorize local access, then
+`pnpm exec wrangler whoami` to list accessible accounts. Set
+`CLOUDFLARE_ACCOUNT_ID` explicitly when deploying locally to an account with
+multiple organizations. Logging in does not configure CI credentials.
+
+Create GitHub environments named `staging` and `production`. Configure each:
+
+| Kind | Name | Value |
+| --- | --- | --- |
+| Secret | `CLOUDFLARE_API_TOKEN` | Cloudflare Edit Cloudflare Workers token scoped to the target account |
+| Variable | `CLOUDFLARE_ACCOUNT_ID` | Target Cloudflare account ID |
+| Variable | `APP_ORIGIN` | Exact HTTPS origin of that environment, without a trailing slash |
+| Variable | `CLERK_PUBLISHABLE_KEY` | `pk_test_...` for staging, `pk_live_...` for production |
+| Secret | `CLERK_JWT_KEY` | Corresponding PEM public key, with actual line breaks |
+
+The public JWT key is stored as a GitHub secret only to simplify multiline
+configuration. No Clerk secret key is required. The deploy job validates these
+settings before building, then uploads runtime bindings together with the
+Worker version. Missing settings or the wrong Clerk key type stop deployment.
+
+Use environment-scoped credentials; remove obsolete repository-level account
+variables and deployment secrets after migrating them to prevent fallback to
+an old account. Keep tokens in GitHub secrets and local private files, never
+in source control. Restrict each GitHub environment to the `main` branch.
+
+### Build and release
 
 ```bash
-pnpm exec wrangler login
-pnpm exec wrangler whoami
 pnpm check
-pnpm run deploy
+pnpm build:staging
+pnpm build:production
 ```
 
-GitHub Actions runs checks on pull requests and pushes to `main`. After checks
-pass on `main`, the deployment job publishes the Worker using the `production`
-environment. The workflow can also be dispatched manually from `main`.
-Deployment jobs are serialized and are not canceled once running.
+The Cloudflare Vite plugin selects the environment at **build time** using
+`CLOUDFLARE_ENV`. `wrangler deploy` uses the generated build configuration;
+do not append `--env` to deploy an already built app.
 
-Configure the repository before the first automated deployment:
+To release production, run the `CI` workflow manually on `main` and select
+`production`. This repeats all checks before deploying that selected commit.
+Staging deploys automatically when a pull request is merged to `main`.
 
-- Secret `CLOUDFLARE_API_TOKEN`: a token created with the Cloudflare **Edit
-  Cloudflare Workers** template, scoped to the deployment account.
-- Variable `CLOUDFLARE_ACCOUNT_ID`: the account ID shown by `wrangler whoami`.
-
-```bash
-gh secret set CLOUDFLARE_API_TOKEN --repo moxt-ai/mobius-cloud
-gh variable set CLOUDFLARE_ACCOUNT_ID --repo moxt-ai/mobius-cloud --body YOUR_ACCOUNT_ID
-```
-
-Local Wrangler OAuth credentials are separate from the CI token. Keep credentials
-in the system credential store or GitHub secrets, never in tracked files.
-Clerk bindings are configured separately from the CI deployment credentials.
+For a local release, use `pnpm deploy:staging` or `pnpm deploy:production`
+with `CLOUDFLARE_ACCOUNT_ID` set. Configure the runtime bindings first with
+`wrangler secret bulk --config wrangler.jsonc --env staging` (or `production`),
+or build and run `wrangler deploy --secrets-file PATH_TO_PRIVATE_JSON` with
+`APP_ORIGIN`, `CLERK_PUBLISHABLE_KEY`, and `CLERK_JWT_KEY` in the JSON file.
+The local `.dev.vars` file is only for development, not deployed credentials.
 
 
 ## Execution Boundary
