@@ -3,7 +3,10 @@ import {
   clerkDirectory,
   createWorkspaceRouter,
 } from "@moxt-ai/mobius-cloud-web-core";
-import { MobiusManagement } from "@moxt-ai/mobius-cloud-web-core/management";
+import {
+  MobiusManagement,
+  mobiusWorkspaceConnections,
+} from "@moxt-ai/mobius-cloud-web-core/management";
 import { useMemo, useRef } from "react";
 import { verifySession } from "../../view-models/authentication/session.ts";
 import { App } from "../application/app.tsx";
@@ -17,6 +20,7 @@ function SignedInApplication() {
   const activeSession = useRef(session);
   activeSession.current = session;
   const sessionId = session.id;
+  const userId = session.user.id;
   const workspaceRouter = useMemo(
     () =>
       createWorkspaceRouter(
@@ -29,8 +33,9 @@ function SignedInApplication() {
             signal,
           ),
         MobiusManagement,
+        mobiusWorkspaceConnections(userId),
       ),
-    [clerk, sessionId],
+    [clerk, sessionId, userId],
   );
   return <App state={{ kind: "signed-in", router: workspaceRouter }} />;
 }
