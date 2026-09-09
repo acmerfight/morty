@@ -1,10 +1,13 @@
 import { Link } from "@tanstack/react-router";
+import { ArrowLeft, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { Button } from "../../components/ui/button.tsx";
 import { Card } from "../../components/ui/card.tsx";
 import { Dialog } from "../../components/ui/dialog.tsx";
 import { Input } from "../../components/ui/input.tsx";
+import { NavigationCardLink } from "../../components/ui/navigation-card-link.tsx";
+import { Spinner } from "../../components/ui/spinner.tsx";
 import { workspacePageSize } from "../../view-models/workspaces/contracts.ts";
 import type { loadWorkspace, loadWorkspaces, MutationResult } from "../../view-models/workspaces/data.ts";
 import { workspaceErrorMessage } from "../../view-models/workspaces/data.ts";
@@ -100,10 +103,19 @@ function WorkspaceDialog({ ui, mutate }: { readonly ui: WorkspaceStore; readonly
                     </Button>
                     <Button
                         type="submit"
+                        aria-label={dialog.kind === "create" ? "Create workspace" : "Delete workspace"}
+                        aria-busy={busy}
                         disabled={busy || (dialog.kind === "create" && !dialog.name.trim())}
                         variant={dialog.kind === "create" ? "primary" : "destructive"}
                     >
-                        {busy ? "Saving…" : dialog.kind === "create" ? "Create workspace" : "Delete workspace"}
+                        {busy ? (
+                            <Spinner label="Saving workspace" />
+                        ) : dialog.kind === "create" ? (
+                            <Plus aria-hidden="true" className="size-4" />
+                        ) : (
+                            <Trash2 aria-hidden="true" className="size-4" />
+                        )}
+                        {dialog.kind === "create" ? "Create workspace" : "Delete workspace"}
                     </Button>
                 </div>
             </form>
@@ -136,11 +148,30 @@ export function WorkspaceList({
         <>
             <div className="mb-9 flex flex-wrap items-end justify-between gap-5">
                 <div>
-                    <p className="mb-2 text-xs font-medium text-primary">Mobius Cloud</p>
                     <h1 className="text-2xl font-semibold tracking-tight">Workspaces</h1>
                     <p className="mt-2 text-[13px] text-muted-foreground">A shared place for your team and agents.</p>
                 </div>
-                <Button onClick={newWorkspace}>New workspace</Button>
+                <div className="flex items-center gap-2">
+                    <Button
+                        aria-label="Refresh workspaces"
+                        aria-busy={refreshing}
+                        variant="ghost"
+                        size="sm"
+                        disabled={refreshing}
+                        onClick={runRefresh}
+                    >
+                        {refreshing ? (
+                            <Spinner label="Refreshing workspaces" />
+                        ) : (
+                            <RefreshCw aria-hidden="true" className="size-3.5" />
+                        )}{" "}
+                        Refresh workspaces
+                    </Button>
+                    <Button onClick={newWorkspace}>
+                        <Plus aria-hidden="true" className="size-4" />
+                        New workspace
+                    </Button>
+                </div>
             </div>
             {items.length === 0 ? (
                 <Card asChild className="border-dashed px-6 py-16 text-center">
@@ -154,19 +185,28 @@ export function WorkspaceList({
                     {items.map((workspace) => (
                         <Card asChild key={workspace.id} className="flex flex-col">
                             <li>
-                                <Link
-                                    to="/workspaces/$workspaceId"
-                                    params={{ workspaceId: workspace.id }}
+                                <NavigationCardLink
+                                    to={`/workspaces/${workspace.id}`}
+                                    label={workspace.name}
                                     className="flex flex-1 items-center gap-3 rounded-t-xl p-5 text-[13px] transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
                                 >
-                                    <span
-                                        aria-hidden="true"
-                                        className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-sm font-semibold text-primary"
-                                    >
-                                        {workspace.name.slice(0, 1).toUpperCase()}
-                                    </span>
-                                    <span className="break-words font-semibold">{workspace.name}</span>
-                                </Link>
+                                    {(pending) => (
+                                        <>
+                                            <span
+                                                aria-hidden="true"
+                                                className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-sm font-semibold text-primary"
+                                            >
+                                                {workspace.name.slice(0, 1).toUpperCase()}
+                                            </span>
+                                            <span className="break-words font-semibold">{workspace.name}</span>
+                                            {pending ? (
+                                                <span className="ml-auto">
+                                                    <Spinner label={`Opening ${workspace.name}`} />
+                                                </span>
+                                            ) : null}
+                                        </>
+                                    )}
+                                </NavigationCardLink>
                                 <div className="flex min-h-12 items-center justify-between border-t border-border px-5 py-2 text-xs">
                                     <span className="text-muted-foreground">Workspace</span>
                                     {workspace.canDelete && (
@@ -177,7 +217,7 @@ export function WorkspaceList({
                                             onClick={() => confirmDelete(workspace)}
                                             className="hover:text-destructive"
                                         >
-                                            Delete
+                                            <Trash2 aria-hidden="true" className="size-3.5" /> Delete
                                         </Button>
                                     )}
                                 </div>
@@ -187,9 +227,6 @@ export function WorkspaceList({
                 </ul>
             )}
             <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-                <Button variant="ghost" size="sm" disabled={refreshing} onClick={runRefresh}>
-                    Refresh workspaces
-                </Button>
                 {totalCount > workspacePageSize && (
                     <nav aria-label="Workspace pages" className="flex items-center gap-4">
                         {page > 1 ? (
@@ -223,23 +260,18 @@ export function WorkspaceList({
     );
 }
 
-function AllWorkspacesLink() {
+export function AllWorkspacesLink() {
     return (
         <Button asChild variant="ghost" size="sm" className="self-start">
             <Link to="/" search={{ page: 1 }}>
-                ← All workspaces
+                <ArrowLeft aria-hidden="true" className="size-4" /> All workspaces
             </Link>
         </Button>
     );
 }
 
 export function WorkspaceApplicationView({ children }: { readonly children: ReactNode }) {
-    return (
-        <>
-            <AllWorkspacesLink />
-            <div className="mt-3 flex min-h-0 flex-1 flex-col">{children}</div>
-        </>
-    );
+    return <div className="flex min-h-0 flex-1 flex-col">{children}</div>;
 }
 
 export function WorkspaceDetail({
@@ -250,13 +282,10 @@ export function WorkspaceDetail({
     readonly children: ReactNode;
 }) {
     return (
-        <>
-            <AllWorkspacesLink />
-            <section className="mt-8">
-                <p className="mb-3 break-words text-sm font-medium text-primary">{workspace.name}</p>
-                <div className="mt-6">{children}</div>
-            </section>
-        </>
+        <section>
+            <p className="mb-3 break-words text-sm font-medium text-primary">{workspace.name}</p>
+            <div className="mt-6">{children}</div>
+        </section>
     );
 }
 
