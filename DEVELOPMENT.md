@@ -103,8 +103,7 @@ boundary exercised by the existing authentication integration scenarios.
 
 Cloud Mobius pairing creation requires a verified Clerk session with an active
 organization. That organization ID is the pairing's tenant; no anonymous Mobius
-tenant is generated. The embedded Pair UI supplies its Clerk token, and Slack's
-internal pairing request forwards the initiating user's token for verification
+tenant is generated. The embedded Pair UI supplies its Clerk token for verification
 at the Mobius boundary. Missing authentication returns 401; a session without an
 active workspace returns 403. Pairing claims continue using the one-time code.
 
@@ -139,6 +138,52 @@ Successful channel authorization saves the workspace association; later visits
 to the plain workspace URL restore it. The channel ID alone grants no access.
 
 ## Cloudflare Deployment
+
+### Slack bot bindings
+
+Cloud presentation primitives live in `packages/web-core/src/components/ui`.
+Buttons, inputs, cards, and Radix dialogs follow Slack's control sizing, green
+accent palette, focus styling, and modal behavior. Use `Button asChild` for
+navigation links and `Card asChild` for semantic card containers. Application
+styles and Tailwind source scanning remain in `packages/web/src/styles.css`;
+web-core does not import global CSS.
+
+Workspace pages use separate application paths beneath the existing app bar:
+
+- `/workspaces/<workspace-id>`: project/bot management and Chat/Slack navigation cards.
+- `/workspaces/<workspace-id>/chat`: the Mobius chat view using the project selected in management. No pairing page is mounted here.
+- `/workspaces/<workspace-id>/slack`: Slack bot management.
+
+Only the selected application view mounts. Chat connection restoration runs when
+opening Chat, so a stale chat connection does not block the workspace overview or Slack.
+
+The route tree composes separate standard and application layouts. Standard routes
+use `WorkspacePage`; Chat and Slack use `WorkspaceApplicationPage` with the shared
+app header, an All workspaces link, and full-width application content. Layouts do
+not infer the active view from URL strings or override embedded component styles.
+
+Cloud project/bot management uses `NativeMobiusRequests` against `/mobius/api`,
+not the Slack proxy. It requires verified workspace membership but no Slack
+placement, storage bindings, or installation. Owner credentials from pairing are
+saved in Mobius's native channel-credential format with explicit owner authority
+and tenant scope; linked-device credentials cannot authorize bot management.
+Only the Slack page uses Slack's context and endpoints.
+
+Slack bots have independent identities and installations. Create a Mobius bot using
+the Mobius Bot API, then open the workspace's Slack page to set up a Slack bot and bind
+it by `botId`. Slack setup does not require a machine connection or Mobius bot.
+Binding uses a transient Mobius owner API credential to create a scoped connector
+and approve its reply target. Only the connector credential is encrypted and stored.
+Changing the binding keeps the Slack installation and isolates subsequent conversations
+under the new connection. Connector credentials expire after Mobius's configured lifetime;
+use Change Mobius bot to establish a new connection when renewal is needed.
+
+Cloud exposes Mobius's `/mobius/api/v1/*` Bot routes and binds `BOT_CONNECTIONS` to
+`BotConnectionActor`. Apply the existing Mobius directory migrations before deployment.
+Slack's complete replacement schema is in
+`apps/slack/packages/worker/migrations/0001_initial.sql`; this release requires a fresh
+Slack database schema. The planned post-merge Slack table reset is handled operationally.
+
 
 ### Browser error monitoring
 

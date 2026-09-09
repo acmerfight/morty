@@ -1,3 +1,4 @@
+export { Button } from "./components/ui/button.tsx";
 export { reportApplicationError } from "./view-models/report-error.ts";
 export {
     clerkDirectory,
@@ -15,8 +16,7 @@ export {
 } from "./view-models/workspaces/contracts.ts";
 export {
     type ChatApplicationProps,
-    type PairApplicationProps,
-    type SlackApplicationProps,
+    type ProjectApplicationProps,
     WorkspaceApplications,
 } from "./views/workspace-applications/workspace-applications.tsx";
-export { createWorkspaceRouter } from "./views/workspaces/router.tsx";
+export { createWorkspaceRouter, type WorkspaceShellProps } from "./views/workspaces/router.tsx";

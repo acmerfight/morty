@@ -7,18 +7,19 @@ import {
     useRouter,
     useRouterState,
 } from "@tanstack/react-router";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import * as v from "valibot";
 import { reportApplicationError } from "../../view-models/report-error.ts";
 import type {
     BrowserWorkspaceConnections,
     WorkspaceChannel,
+    WorkspaceConnection,
     WorkspaceConnectionProps,
 } from "../../view-models/workspaces/connections.ts";
 import { type WorkspaceDirectory, workspacePageSize } from "../../view-models/workspaces/contracts.ts";
 import { loadWorkspace, loadWorkspaces, mutateWorkspace } from "../../view-models/workspaces/data.ts";
 import { createWorkspaceStore } from "../../view-models/workspaces/store.ts";
-import { WorkspaceDetail, WorkspaceFailure, WorkspaceList } from "./workspaces.tsx";
+import { WorkspaceApplicationView, WorkspaceDetail, WorkspaceFailure, WorkspaceList } from "./workspaces.tsx";
 
 const pageSchema = v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(100_000));
 
@@ -57,23 +58,58 @@ function RouteFailure({ error, reset }: { readonly error: Error; readonly reset:
     );
 }
 
+export interface WorkspaceShellProps {
+    readonly children: ReactNode;
+}
+
 export function createWorkspaceRouter<TConnection extends WorkspaceChannel>(
     directory: WorkspaceDirectory,
     authorize: (signal: AbortSignal) => Promise<void>,
     WorkspaceManagement: ComponentType<WorkspaceConnectionProps<TConnection>>,
     connections: BrowserWorkspaceConnections<TConnection>,
+    layouts: {
+        readonly Standard: ComponentType<WorkspaceShellProps>;
+        readonly Application: ComponentType<WorkspaceShellProps>;
+    },
 ) {
+    const { Standard, Application } = layouts;
     const ui = createWorkspaceStore();
     const rootRoute = createRootRoute({
         beforeLoad: async ({ abortController }) => {
             await authorize(abortController.signal);
         },
-        component: WorkspaceLayout,
-        errorComponent: RouteFailure,
-        notFoundComponent: () => <WorkspaceFailure message="Page not found." />,
+        component: Outlet,
+        errorComponent: (props) => (
+            <Standard>
+                <RouteFailure {...props} />
+            </Standard>
+        ),
+        notFoundComponent: () => (
+            <Standard>
+                <WorkspaceFailure message="Page not found." />
+            </Standard>
+        ),
+    });
+    const standardLayout = createRoute({
+        getParentRoute: () => rootRoute,
+        id: "standard",
+        component: () => (
+            <Standard>
+                <WorkspaceLayout />
+            </Standard>
+        ),
+    });
+    const applicationLayout = createRoute({
+        getParentRoute: () => rootRoute,
+        id: "application",
+        component: () => (
+            <Application>
+                <WorkspaceLayout />
+            </Application>
+        ),
     });
     const indexRoute = createRoute({
-        getParentRoute: () => rootRoute,
+        getParentRoute: () => standardLayout,
         path: "/",
         validateSearch: (search) => ({
             page: parsePage(Reflect.get(search, "page")),
@@ -112,31 +148,54 @@ export function createWorkspaceRouter<TConnection extends WorkspaceChannel>(
             );
         },
     });
-    const detailRoute = createRoute({
-        getParentRoute: () => rootRoute,
-        path: "/workspaces/$workspaceId",
-        validateSearch: (search) => ({ channel: Reflect.get(search, "channel") }),
-        loaderDeps: ({ search }) => ({ channel: search.channel }),
-        loader: async ({ abortController, params, deps }) => {
-            const workspace = await loadWorkspace(directory, params.workspaceId, abortController.signal);
-            const connection = await connections.load(workspace.id, deps.channel, abortController.signal);
-            return { workspace, connection };
-        },
-        component: function WorkspaceDetailRoute() {
-            const { workspace, connection } = detailRoute.useLoaderData();
-            return (
-                <WorkspaceDetail workspace={workspace}>
+    function workspacePage(
+        path: "/workspaces/$workspaceId" | "/workspaces/$workspaceId/chat" | "/workspaces/$workspaceId/slack",
+        view: "overview" | "chat" | "slack",
+        parent: typeof standardLayout | typeof applicationLayout,
+    ) {
+        const detailRoute = createRoute({
+            getParentRoute: () => parent,
+            path,
+            validateSearch: (search) => ({ channel: Reflect.get(search, "channel") }),
+            loaderDeps: ({ search }) => ({ channel: search.channel }),
+            loader: async ({ abortController, params, deps }) => {
+                const workspace = await loadWorkspace(directory, params.workspaceId, abortController.signal);
+                const connection: WorkspaceConnection<TConnection> =
+                    view === "chat" || deps.channel !== undefined
+                        ? await connections.load(workspace.id, deps.channel, abortController.signal)
+                        : { kind: "unpaired" };
+                return { workspace, connection };
+            },
+            component: function WorkspaceDetailRoute() {
+                const { workspace, connection } = detailRoute.useLoaderData();
+                const content = (
                     <WorkspaceManagement
+                        view={view}
+                        workspacePath={`/workspaces/${workspace.id}`}
                         key={`${workspace.id}:${connection.kind === "connected" ? connection.connection.channelId : "unpaired"}`}
                         initialConnection={connection}
-                        onConnected={(channel) => connections.save(workspace.id, channel)}
                     />
-                </WorkspaceDetail>
-            );
-        },
-    });
+                );
+                return view === "overview" ? (
+                    <WorkspaceDetail workspace={workspace}>{content}</WorkspaceDetail>
+                ) : (
+                    <WorkspaceApplicationView>{content}</WorkspaceApplicationView>
+                );
+            },
+        });
+        return detailRoute;
+    }
     return createRouter({
-        routeTree: rootRoute.addChildren([indexRoute, detailRoute]),
+        routeTree: rootRoute.addChildren([
+            standardLayout.addChildren([
+                indexRoute,
+                workspacePage("/workspaces/$workspaceId", "overview", standardLayout),
+            ]),
+            applicationLayout.addChildren([
+                workspacePage("/workspaces/$workspaceId/chat", "chat", applicationLayout),
+                workspacePage("/workspaces/$workspaceId/slack", "slack", applicationLayout),
+            ]),
+        ]),
         defaultOnCatch: (error) => reportApplicationError(error, "workspace-route"),
         scrollRestoration: true,
     });

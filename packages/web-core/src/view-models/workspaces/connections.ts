@@ -10,8 +10,9 @@ export type WorkspaceConnection<TConnection> =
     | { readonly kind: "connected"; readonly connection: TConnection };
 
 export interface WorkspaceConnectionProps<TConnection> {
+    readonly view: "overview" | "chat" | "slack";
+    readonly workspacePath: string;
     readonly initialConnection: WorkspaceConnection<TConnection>;
-    readonly onConnected: (connection: TConnection) => void;
 }
 
 export class WorkspaceConnectionError extends Error {
