@@ -1,13 +1,12 @@
-import { useClerk, useSession } from "@clerk/react";
-import { clerkDirectory, createWorkspaceRouter } from "@moxt-ai/mobius-cloud-web-core";
-import { MobiusManagement, mobiusWorkspaceConnections } from "@moxt-ai/mobius-cloud-web-core/management";
+import { useSession } from "@clerk/react";
 import { useMemo, useRef } from "react";
-import { verifySession } from "../../view-models/authentication/session.ts";
-import { App, WorkspaceApplicationPage, WorkspacePage } from "../application/app.tsx";
+import { createApplicationRouter } from "../../index.ts";
+import { verifySession, waitForClerk } from "../../view-models/authentication/session.ts";
+import { App, FullScreenApplicationPage, SignedInPage } from "../application/app.tsx";
+import { MobiusManagement, userBotConnection } from "../applications/mobius-management.tsx";
 import { router as authRouter } from "./router.tsx";
 
 function SignedInApplication() {
-    const clerk = useClerk();
     const { session } = useSession();
     if (session === null || session === undefined) {
         throw new Error("Missing active session");
@@ -16,18 +15,19 @@ function SignedInApplication() {
     activeSession.current = session;
     const sessionId = session.id;
     const userId = session.user.id;
-    const workspaceRouter = useMemo(
+    const applicationRouter = useMemo(
         () =>
-            createWorkspaceRouter(
-                clerkDirectory(clerk),
-                (signal) => verifySession(sessionId, clerk.session?.id, () => activeSession.current.getToken(), signal),
+            createApplicationRouter(
+                (signal) =>
+                    verifySession(sessionId, activeSession.current.id, () => activeSession.current.getToken(), signal),
+                userId,
                 MobiusManagement,
-                mobiusWorkspaceConnections(userId),
-                { Standard: WorkspacePage, Application: WorkspaceApplicationPage },
+                userBotConnection(userId, (signal) => waitForClerk(() => activeSession.current.getToken(), signal)),
+                { Standard: SignedInPage, Application: FullScreenApplicationPage },
             ),
-        [clerk, sessionId, userId],
+        [sessionId, userId],
     );
-    return <App state={{ kind: "signed-in", router: workspaceRouter }} />;
+    return <App state={{ kind: "signed-in", router: applicationRouter }} />;
 }
 
 export function SessionApplication() {
