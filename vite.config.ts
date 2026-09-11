@@ -47,19 +47,19 @@ export default defineConfig({
             {
                 find: "@moxt-ai/mobius-sdk/platform",
                 replacement: fileURLToPath(
-                    new URL("./third-party/mobius/packages/web-sdk/src/platform.ts", import.meta.url),
+                    new URL("./third-party/mobius/packages/mobius-sdk/src/platform.ts", import.meta.url),
                 ),
             },
             {
                 find: "@moxt-ai/mobius-sdk/channel",
                 replacement: fileURLToPath(
-                    new URL("./third-party/mobius/packages/web-sdk/src/channel.ts", import.meta.url),
+                    new URL("./third-party/mobius/packages/mobius-sdk/src/channel.ts", import.meta.url),
                 ),
             },
             {
                 find: "@moxt-ai/mobius-sdk",
                 replacement: fileURLToPath(
-                    new URL("./third-party/mobius/packages/web-sdk/src/index.ts", import.meta.url),
+                    new URL("./third-party/mobius/packages/mobius-sdk/src/index.ts", import.meta.url),
                 ),
             },
             {

@@ -45,12 +45,9 @@ export class PlatformProjectGateway {
     readonly create = async (userId: string, displayName: string, token: string, signal: AbortSignal) => {
         signal.throwIfAborted();
         const configuration = this.configuration();
-        let placement: { readonly d1ShardId: string; readonly r2BucketId: string };
+        let locationHint: string;
         try {
-            placement = {
-                d1ShardId: v.parse(platformIdentifier, this.#bindings.MOBIUS_PROJECT_D1_SHARD_ID),
-                r2BucketId: v.parse(platformIdentifier, this.#bindings.MOBIUS_PROJECT_R2_BUCKET_ID),
-            };
+            locationHint = v.parse(platformIdentifier, this.#bindings.MOBIUS_PROJECT_LOCATION_HINT);
         } catch (cause) {
             throw new PlatformProjectError("PLATFORM_UNAVAILABLE", "Project placement is not configured.", 503, {
                 cause,
@@ -74,7 +71,7 @@ export class PlatformProjectGateway {
                     clientReference: userId,
                     idempotencyKey: `cloud-${userId}`,
                     displayName,
-                    placement,
+                    locationHint,
                 },
                 signal,
             );

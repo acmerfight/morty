@@ -66,8 +66,8 @@ Project mapping is persisted by Cloud user, Platform origin, and App; it survive
 reloads and is isolated from other users. Developer tokens are not stored.
 
 Before running this flow, apply `packages/worker/migrations/0003_platform_project.sql`
-through Wrangler D1 migrations and configure `MOBIUS_PROJECT_D1_SHARD_ID` and
-`MOBIUS_PROJECT_R2_BUCKET_ID`. Staging and production placement bindings are recorded
+through Wrangler D1 migrations and configure `MOBIUS_PROJECT_LOCATION_HINT`.
+Staging and production use the `apac` location hint; Platform resolves storage placement. Bindings are recorded
 in `wrangler.jsonc`. The deployment workflow applies Cloud D1 migrations before
 deploying each environment. A live signed-in provisioning check is still pending.
 Subsequent Bot operations must authorize the user's saved Project
@@ -75,7 +75,7 @@ and Bot before calling Mobius with the AppCredential.
 
 ### 2. Worker SDK and authentication
 
-The Worker now depends on the local `third-party/mobius/packages/web-sdk` package
+The Worker now depends on the local `third-party/mobius/packages/mobius-sdk` package
 and uses `@moxt-ai/mobius-sdk/platform` for Project provisioning. The Platform
 subpath is configured in TypeScript and Vite. Use `@moxt-ai/mobius-sdk/server` for Bot, Runtime,
 Session, and Conversation operations, and `@moxt-ai/mobius-sdk/platform` for

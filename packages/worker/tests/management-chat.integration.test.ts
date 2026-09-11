@@ -97,7 +97,7 @@ async function mobiusService() {
                     clientReference: v.string(),
                     idempotencyKey: v.string(),
                     displayName: v.string(),
-                    placement: v.object({ d1ShardId: v.string(), r2BucketId: v.string() }),
+                    locationHint: v.string(),
                 }),
                 JSON.parse(body),
             );
@@ -182,8 +182,7 @@ test("Given a signed-in developer, When they provision a Platform Project and re
         DATABASE: database,
         MOBIUS_APP_ID: "cloud-app",
         MOBIUS_BASE_URL: mobius.baseUrl,
-        MOBIUS_PROJECT_D1_SHARD_ID: "apac-01",
-        MOBIUS_PROJECT_R2_BUCKET_ID: "apac",
+        MOBIUS_PROJECT_LOCATION_HINT: "apac",
     };
     const alice = issuer.createSession("user_alice");
     const bob = issuer.createSession("user_bob");
