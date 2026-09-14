@@ -79,8 +79,10 @@ Given an interrupted event connection, When the SDK reconnects and replays event
 Then the reply contains each text delta once. Given exhausted stream recovery,
 Then Chat shows a connection failure instead of silently remaining live.
 
-Do not add automated E2E test files. Verify the user journey manually with the
-`agent-browser` CLI against the running application. A first-time visitor should
+Run `pnpm test:e2e:opencode` for the live OpenCode browser journey. It is excluded
+from `pnpm check` and runs nightly in GitHub Actions. Verify other visual details
+manually with the `agent-browser` CLI against the running application. A first-time
+visitor should
 receive a browser-held anonymous identity and Bot, then see a current-origin
 `follow .../pair.md?token=...` instruction. After local-agent pairing, the same page
 opens headerless Chat without Project controls or Slack navigation. Reload and
