@@ -12,6 +12,27 @@ const setupInput = v.strictObject({
     workspaceRef: v.pipe(v.string(), v.minLength(1), v.maxLength(2048)),
     agentConfigRevision: v.pipe(v.number(), v.integer(), v.minValue(1)),
 });
+const nativeDirectoryId = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/u));
+const nativeIdentity = {
+    runtimeId: platformIdentifier,
+    agentId: platformIdentifier,
+    directoryId: nativeDirectoryId,
+    additionalDirectoryIds: v.pipe(v.array(nativeDirectoryId), v.maxLength(16)),
+};
+const nativeInput = v.variant("action", [
+    v.strictObject({
+        ...nativeIdentity,
+        action: v.literal("list"),
+        cursor: v.nullable(platformIdentifier),
+        discoveryId: v.nullable(platformIdentifier),
+    }),
+    v.strictObject({
+        ...nativeIdentity,
+        action: v.literal("import"),
+        entryId: platformIdentifier,
+        discoveryId: platformIdentifier,
+    }),
+]);
 
 export function createBotChatRoutes() {
     return new Hono<ChatHttpEnvironment>()
@@ -24,7 +45,7 @@ export function createBotChatRoutes() {
         )
         .all("/bots/:botId/:operation", async (context, next) => {
             const operation = context.req.param("operation");
-            if (!["access", "setup"].includes(operation)) {
+            if (!["access", "setup", "workspace", "native-sessions", "session-access"].includes(operation)) {
                 return await next();
             }
             if (context.req.method !== "POST") {
@@ -36,7 +57,10 @@ export function createBotChatRoutes() {
             if (session instanceof Response) {
                 return session;
             }
-            const signal = AbortSignal.any([context.req.raw.signal, AbortSignal.timeout(45000)]);
+            const signal = AbortSignal.any([
+                context.req.raw.signal,
+                AbortSignal.timeout(operation === "native-sessions" ? 120000 : 45000),
+            ]);
             const botId = v.parse(platformIdentifier, context.req.param("botId"));
             if (!(await context.env.storages.managedBots.ownsBot(session.userId, botId, signal))) {
                 throw new PlatformProjectError("NOT_FOUND", "Your Bot was not found.", 404);
@@ -46,6 +70,12 @@ export function createBotChatRoutes() {
             const project = await context.env.storages.platformProjects.read(session.userId, origin, appId, signal);
             if (project === null) {
                 throw new PlatformProjectError("BOT_UNAVAILABLE", "Your Bot is unavailable.", 409);
+            }
+            if (operation === "workspace") {
+                const workspace = await gateway.chatWorkspace(project.projectId, botId, session.userId, signal);
+                const response = json(workspace);
+                response.headers.set("Cache-Control", "no-store");
+                return response;
             }
             if (operation === "access") {
                 const access = await gateway.openChat(project.projectId, botId, session.userId, signal);
@@ -71,6 +101,34 @@ export function createBotChatRoutes() {
             } catch (cause) {
                 signal.throwIfAborted();
                 throw new PlatformProjectError("INVALID_REQUEST", "The JSON request is invalid.", 400, { cause });
+            }
+            if (operation === "session-access") {
+                const input = v.parse(v.strictObject({ sessionId: platformIdentifier }), body);
+                const access = await gateway.nativeSessionAccess(project.projectId, input.sessionId, signal);
+                context.env.logger.info(
+                    { event: "session-access-issued", userId: session.userId, botId, sessionId: input.sessionId },
+                    "Chat audit event",
+                );
+                const response = json(access);
+                response.headers.set("Cache-Control", "no-store");
+                return response;
+            }
+            if (operation === "native-sessions") {
+                const { runtimeId, ...input } = v.parse(nativeInput, body);
+                const result = await gateway.nativeSessions(project.projectId, runtimeId, input, signal);
+                context.env.logger.info(
+                    {
+                        event: "native-session-operation",
+                        userId: session.userId,
+                        botId,
+                        runtimeId,
+                        action: input.action,
+                    },
+                    "Chat audit event",
+                );
+                const response = json(result);
+                response.headers.set("Cache-Control", "no-store");
+                return response;
             }
             const result = await gateway.configureBot(
                 project.projectId,

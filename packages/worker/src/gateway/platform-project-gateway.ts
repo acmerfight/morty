@@ -6,6 +6,7 @@ import {
     MobiusTimeoutError,
 } from "@moxt-ai/mobius-sdk/platform";
 import {
+    MobiusActiveBotState,
     MobiusBotOwnerClient,
     MobiusClient,
     MobiusNoBotCompletionPolicy,
@@ -100,16 +101,27 @@ export class PlatformProjectGateway {
         signal: AbortSignal,
     ) => {
         return await this.#withBot(projectId, botId, actorReference, signal, async (client, bot) => {
-            if (bot.state.kind === "active") {
-                return { status: "active" };
-            }
-            if (bot.state.kind !== "draft") {
+            if (bot.state.kind !== "draft" && bot.state.kind !== "active") {
                 throw new PlatformProjectError("BOT_UNAVAILABLE", "Your Bot cannot be configured.", 409);
             }
             const [behaviors, bindings] = await Promise.all([
                 client.listBehaviors(botId, signal),
                 client.listBindings(botId, signal),
             ]);
+            const activeState = bot.state;
+            const activeBinding =
+                activeState instanceof MobiusActiveBotState
+                    ? bindings.executionBindings.find((binding) => binding.bindingId === activeState.activeBindingId)
+                    : undefined;
+            if (
+                activeBinding !== undefined &&
+                activeBinding.runtimeId === input.runtimeId &&
+                activeBinding.agentRef === input.agentRef &&
+                activeBinding.workspaceRef === input.workspaceRef &&
+                activeBinding.agentConfigRevision === input.agentConfigRevision
+            ) {
+                return { status: "active" };
+            }
             const pending = bindings.executionBindings.find((binding) => binding.state.kind === "requested");
             if (pending !== undefined) {
                 if (
@@ -145,15 +157,24 @@ export class PlatformProjectGateway {
                     409,
                 );
             }
+            const activeBehavior =
+                activeState instanceof MobiusActiveBotState
+                    ? behaviors.behaviorRevisions.find(
+                          (revision) => revision.behaviorRevisionId === activeState.activeBehaviorRevisionId,
+                      )
+                    : undefined;
             const behavior =
                 behaviors.behaviorRevisions.find((revision) => revision.state.kind === "proposed") ??
                 (await client.createBehavior(
                     botId,
                     {
-                        expectedRevision: 0,
-                        instructions: "Be a helpful assistant.",
-                        agentConfiguration: {},
-                        requiredCapabilities: ["embedded-context"],
+                        expectedRevision: Math.max(
+                            0,
+                            ...behaviors.behaviorRevisions.map((revision) => revision.revisionNumber),
+                        ),
+                        instructions: activeBehavior?.instructions ?? "Be a helpful assistant.",
+                        agentConfiguration: activeBehavior?.agentConfiguration ?? {},
+                        requiredCapabilities: activeBehavior?.requiredCapabilities ?? ["embedded-context"],
                     },
                     signal,
                 ));
@@ -171,15 +192,80 @@ export class PlatformProjectGateway {
         });
     };
 
+    readonly chatWorkspace = async (projectId: string, botId: string, userId: string, signal: AbortSignal) =>
+        await this.#withBot(projectId, botId, userId, signal, async (owner, bot) => {
+            const [runtimes, bindings] = await Promise.all([
+                this.#withProject(projectId, signal, (client) => client.runtimes.list(signal)),
+                owner.listBindings(botId, signal),
+            ]);
+            const state = bot.state;
+            const active =
+                state instanceof MobiusActiveBotState
+                    ? bindings.executionBindings.find((binding) => binding.bindingId === state.activeBindingId)
+                    : undefined;
+            return {
+                status: bot.state.kind,
+                selected:
+                    active === undefined
+                        ? null
+                        : {
+                              runtimeId: active.runtimeId,
+                              agentRef: active.agentRef,
+                              workspaceRef: active.workspaceRef,
+                              agentConfigRevision: active.agentConfigRevision,
+                          },
+                agents: runtimes.flatMap((runtime) =>
+                    runtime.agents.map((agent) => ({
+                        runtimeId: runtime.runtimeId,
+                        agentRef: agent.id,
+                        label: agent.label,
+                        machineName: runtime.machineName,
+                        online: runtime.online,
+                    })),
+                ),
+            };
+        });
+
+    readonly nativeSessionAccess = async (projectId: string, sessionId: string, signal: AbortSignal) =>
+        await this.#withProject(projectId, signal, async (client) => {
+            const access = await client.sessions.createAccess(sessionId, 600, signal);
+            return { ...access, endpoint: this.configuration().origin };
+        });
+
+    readonly nativeSessions = async (
+        projectId: string,
+        runtimeId: string,
+        request: Parameters<MobiusClient["runtimes"]["nativeSessions"]>[1],
+        signal: AbortSignal,
+    ) =>
+        await this.#withProject(
+            projectId,
+            signal,
+            async (client) => {
+                return await client.runtimes.nativeSessions(runtimeId, request, signal);
+            },
+            120000,
+        );
+
     readonly openChat = async (projectId: string, botId: string, userId: string, signal: AbortSignal) =>
         await this.#withBot(projectId, botId, userId, signal, async (client, bot) => {
-            if (bot.state.kind !== "active") {
+            if (!(bot.state instanceof MobiusActiveBotState)) {
                 throw new PlatformProjectError("AGENT_REQUIRED", "Connect your local agent to start chatting.", 409);
             }
-            const clientConversationKey = "personal-chat";
-            const conversation = await client.createConversation(botId, { clientConversationKey }, signal);
+            let clientConversationKey = "personal-chat";
+            let conversation = await client.createConversation(botId, { clientConversationKey }, signal);
+            if (conversation.bindingId !== bot.state.activeBindingId) {
+                const digest = await crypto.subtle.digest(
+                    "SHA-256",
+                    new TextEncoder().encode(bot.state.activeBindingId),
+                );
+                signal.throwIfAborted();
+                clientConversationKey = `chat-${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+                conversation = await client.createConversation(botId, { clientConversationKey }, signal);
+            }
             if (
                 conversation.botId !== botId ||
+                conversation.bindingId !== bot.state.activeBindingId ||
                 conversation.clientConversationKey !== clientConversationKey ||
                 conversation.state.kind === "closed"
             ) {
@@ -202,6 +288,7 @@ export class PlatformProjectGateway {
                 "conversation:event:read",
                 "conversation:message:create",
                 "conversation:turn:create",
+                "conversation:configure",
             ] as const;
             const access = await platform.issueConversationAccessCredential(
                 conversation.conversationId,
@@ -286,13 +373,14 @@ export class PlatformProjectGateway {
         projectId: string,
         signal: AbortSignal,
         operation: (client: MobiusClient) => Promise<T>,
+        operationTimeoutMilliseconds = 15000,
     ): Promise<T> => {
         signal.throwIfAborted();
         const client = new MobiusClient({
             endpoint: this.configuration().origin,
             projectId: v.parse(platformIdentifier, projectId),
             credentialProvider: new MobiusAppCredentialProvider(v.parse(v.string(), this.#bindings.MOBIUS_APP_SECRET)),
-            operationTimeoutMilliseconds: 15000,
+            operationTimeoutMilliseconds,
         });
         try {
             return await operation(client);
@@ -306,6 +394,11 @@ export class PlatformProjectGateway {
             }
             if (cause instanceof MobiusApiError && cause.status === 404) {
                 throw new PlatformProjectError("NOT_FOUND", "The Runtime pairing was not found.", 404, { cause });
+            }
+            if (cause instanceof MobiusApiError) {
+                throw new PlatformProjectError(cause.code, "Platform could not complete Runtime setup.", cause.status, {
+                    cause,
+                });
             }
             throw new PlatformProjectError("PLATFORM_UNAVAILABLE", "Platform could not complete Runtime setup.", 502, {
                 cause,
