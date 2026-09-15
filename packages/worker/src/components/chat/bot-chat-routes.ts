@@ -44,7 +44,7 @@ export function createBotChatRoutes() {
             }),
         )
         .all(
-            "/bots/:botId/:operation{access|setup|workspace|native-sessions|session-access}",
+            "/bots/:botId/:operation{access|setup|workspace|native-sessions|session-access|draft-settings}",
             async (context, next) => {
                 if (context.req.method !== "POST") {
                     const response = json(
@@ -62,7 +62,9 @@ export function createBotChatRoutes() {
                 const session = context.get("session");
                 const signal = AbortSignal.any([
                     context.req.raw.signal,
-                    AbortSignal.timeout(operation === "native-sessions" ? 120000 : 45000),
+                    AbortSignal.timeout(
+                        operation === "native-sessions" || operation === "draft-settings" ? 120000 : 45000,
+                    ),
                 ]);
                 const botId = v.parse(platformIdentifier, context.req.param("botId"));
                 if (!(await context.env.storages.managedBots.ownsBot(session.userId, botId, signal))) {
@@ -80,6 +82,16 @@ export function createBotChatRoutes() {
                     response.headers.set("Cache-Control", "no-store");
                     return response;
                 }
+                if (operation === "draft-settings") {
+                    const settings = await gateway.draftSettings(project.projectId, botId, session.userId, signal);
+                    context.env.logger.info(
+                        { event: "chat-settings-prepared", userId: session.userId, botId },
+                        "Chat audit event",
+                    );
+                    const response = json(settings);
+                    response.headers.set("Cache-Control", "no-store");
+                    return response;
+                }
                 if (operation === "access") {
                     const text = await context.req.text();
                     let body: unknown = {};
@@ -94,16 +106,23 @@ export function createBotChatRoutes() {
                         }
                     }
                     const input = v.parse(
-                        v.strictObject({ conversationKey: v.optional(platformIdentifier, "personal-chat") }),
+                        v.union([
+                            v.strictObject({ conversationId: platformIdentifier }),
+                            v.strictObject({
+                                conversationKey: platformIdentifier,
+                                bindingId: platformIdentifier,
+                                configuration: v.strictObject({
+                                    additionalDirectoryIds: v.pipe(v.array(nativeDirectoryId), v.maxLength(16)),
+                                    booleanValue: v.boolean(),
+                                    configId: platformIdentifier,
+                                    value: v.pipe(v.string(), v.maxLength(500)),
+                                    valueType: v.picklist(["select", "boolean"]),
+                                }),
+                            }),
+                        ]),
                         body,
                     );
-                    const access = await gateway.openChat(
-                        project.projectId,
-                        botId,
-                        session.userId,
-                        signal,
-                        input.conversationKey,
-                    );
+                    const access = await gateway.openChat(project.projectId, botId, session.userId, signal, input);
                     context.env.logger.info(
                         {
                             event: "bot-chat-access-issued",
