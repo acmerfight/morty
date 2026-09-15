@@ -60,7 +60,7 @@ jobs:
 
   check:
     name: check
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -104,13 +104,22 @@ jobs:
 
       - run: pnpm check
 
+      - name: Save coverage report
+        continue-on-error: true
+        if: ${{ !cancelled() && hashFiles('coverage/lcov.info') != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
+
       - name: Validate Cloud D1 migrations
         run: |
           pnpm exec wrangler d1 migrations apply CHAT_DATABASE_APAC --local
           pnpm exec wrangler d1 migrations apply CHAT_DATABASE_WNAM --local
 
   deploy:
-    needs: validate-worker-config
+    needs: [check, validate-worker-config]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     uses: ./.github/workflows/deploy.yml
     secrets: inherit
