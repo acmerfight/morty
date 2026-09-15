@@ -136,8 +136,13 @@ hosted SDK, so the suite requires internet access but no Clerk login. Setup
 waits use explicitly advanced fake timers with a fixed system time.
 
 These tests require Chrome and the checked-out Mobius submodule. They share the
-local-stack runner and diagnostics used by the conversation scenarios and run in
-parallel with the `pnpm check` components in PR/merge-queue CI. HTTP integration
+local-stack runner and diagnostics used by the conversation scenarios. Playwright
+global setup builds Mobius, Chat, and the setup bundle once before three workers
+run individual journeys in parallel, including scenarios in the same file. Each
+journey owns temporary storage, Runtime state, dynamic HTTP and inspector ports,
+and its browser. Both local `pnpm test:e2e` and the single browser CI job use this
+execution model. The required `check` status waits for quality checks and browser
+journeys; failed journeys retain their own diagnostics directories. HTTP integration
 coverage additionally runs the TypeScript CLI as a subprocess to verify identity
 reuse, ticket consumption, private configuration, and Runtime replacement failures.
 
