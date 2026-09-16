@@ -14,6 +14,7 @@ import { Button } from "../../components/ui/cloud-button.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { type RecordedAgentActivity, recordAgentActivity } from "../../services/chat/agent-activities.ts";
 import type { BotChatApi, ChatDraftConfiguration, ChatWorkspace } from "../../services/chat/bot-chat-api.ts";
+import type { IdentityTransfer } from "../../services/identity/anonymous-identity-api.ts";
 import type { ManagedBot } from "../../services/management/management-api.ts";
 import { CloudApiError } from "../../services/management/management-api.ts";
 import { BotConversationTurn } from "./bot-conversation-turn.tsx";
@@ -78,7 +79,12 @@ type State =
 type Sending =
     | { readonly kind: "idle" }
     | { readonly kind: "sending" }
+    | { readonly kind: "running"; readonly turnId: string }
+    | { readonly kind: "stopping"; readonly turnId: string }
+    | { readonly kind: "stop-failed"; readonly turnId: string; readonly message: string }
     | { readonly kind: "failed"; readonly message: string };
+
+const ACTIVE_ATTEMPT_KINDS: ReadonlySet<string> = new Set(["dispatching", "running", "waiting_input"]);
 
 function updateHistory(current: State, client: MobiusBrowserClient, history: MobiusBrowserHistory): State {
     if (
@@ -127,6 +133,7 @@ function updateStreamedHistory(current: State, client: MobiusBrowserClient, even
 
 export function BotChatHome({
     requests,
+    createTransfer,
 }: {
     readonly requests: Pick<
         BotChatApi,
@@ -144,6 +151,7 @@ export function BotChatHome({
         | "createConversation"
         | "draftSettings"
     >;
+    readonly createTransfer: (signal: AbortSignal) => Promise<IdentityTransfer>;
 }) {
     const [state, setState] = useState<State>({ kind: "loading" });
     const [revision, retry] = useState(0);
@@ -166,6 +174,11 @@ export function BotChatHome({
     const target = useRef(initialTarget);
     const [draftSettings, setDraftSettings] = useState<ChatDraftConfiguration | null>(null);
     const messageAttempt = useRef<{ readonly content: string; readonly key: string } | null>(null);
+    const activeTurn = useRef<{
+        readonly client: MobiusBrowserClient;
+        readonly sessionId: string;
+        readonly turnId: string;
+    } | null>(null);
     const [sending, setSending] = useState<Sending>({ kind: "idle" });
     const lifetime = useRef<{
         readonly controller: AbortController;
@@ -183,6 +196,7 @@ export function BotChatHome({
         setDraft("");
         setAttachments([]);
         setSending({ kind: "idle" });
+        activeTurn.current = null;
         setDraftSettings(null);
         messageAttempt.current = null;
         setConversation({ kind: "bot" });
@@ -201,6 +215,7 @@ export function BotChatHome({
         setDraft("");
         setAttachments([]);
         setSending({ kind: "idle" });
+        activeTurn.current = null;
         setDraftSettings(null);
         messageAttempt.current = null;
         followLatest.current = true;
@@ -247,9 +262,9 @@ export function BotChatHome({
             }
             const view = current.kind === "switching" ? current.view : current;
             if (view.kind === "ready" || view.kind === "draft") {
-                // A new draft can render immediately while setup is revalidated. When
-                // opening another session, retain the current view until its replacement
-                // is ready so switching never blanks Chat behind a loading spinner.
+                // A new draft can render immediately while setup is revalidated. Keep the
+                // current Bot available to the sidebar while another session opens, but
+                // hide its stale conversation content behind the switching state.
                 return target.current.kind === "draft" ? { kind: "draft", bot: view.bot } : { kind: "switching", view };
             }
             return { kind: "loading" };
@@ -308,6 +323,15 @@ export function BotChatHome({
                     BigInt(event.sequence) > snapshotSequence
                 ) {
                     await refresh();
+                    if (
+                        (event.payload instanceof MobiusTurnCompletedEvent ||
+                            event.payload instanceof MobiusTurnFailedEvent) &&
+                        activeTurn.current?.client === session &&
+                        activeTurn.current.sessionId === event.payload.sessionId
+                    ) {
+                        activeTurn.current = null;
+                        setSending({ kind: "idle" });
+                    }
                 }
                 return true;
             };
@@ -409,7 +433,9 @@ export function BotChatHome({
                 },
                 controller.signal,
             );
-            await client.messages.run(message.messageId, controller.signal);
+            const turn = await client.messages.run(message.messageId, controller.signal);
+            activeTurn.current = { client, sessionId: turn.sessionId, turnId: turn.turnId };
+            setSending({ kind: "running", turnId: turn.turnId });
             const history = await client.history.read(new MobiusPageRequest(100, ""), controller.signal);
             if (!controller.signal.aborted) {
                 if (createdId !== null) {
@@ -426,17 +452,60 @@ export function BotChatHome({
                 setDraft("");
                 setAttachments([]);
                 messageAttempt.current = null;
-                setSending({ kind: "idle" });
+                const recorded = history.turns.find((item) => item.messageId === message.messageId);
+                if (recorded !== undefined && !ACTIVE_ATTEMPT_KINDS.has(recorded.attempt.kind)) {
+                    activeTurn.current = null;
+                    setSending({ kind: "idle" });
+                }
             }
         } catch (cause) {
             if (!controller.signal.aborted) {
-                setSending({
-                    kind: "failed",
-                    message: cause instanceof Error ? cause.message : "The message could not be sent.",
-                });
+                const message = cause instanceof Error ? cause.message : "The message could not be sent.";
+                const turn = activeTurn.current;
+                setSending(
+                    turn === null ? { kind: "failed", message } : { kind: "stop-failed", turnId: turn.turnId, message },
+                );
             }
         } finally {
             createdClient?.close();
+        }
+    };
+
+    const stop = async () => {
+        const turn = activeTurn.current;
+        const connection = lifetime.current;
+        if (
+            turn === null ||
+            connection === null ||
+            (sending.kind !== "running" && sending.kind !== "stop-failed") ||
+            sending.turnId !== turn.turnId
+        ) {
+            return;
+        }
+        setSending({ kind: "stopping", turnId: turn.turnId });
+        try {
+            await turn.client.turns.cancel(
+                turn.turnId,
+                crypto.randomUUID(),
+                AbortSignal.any([connection.controller.signal, AbortSignal.timeout(15000)]),
+            );
+            const history = await turn.client.history.read(
+                new MobiusPageRequest(100, ""),
+                AbortSignal.any([connection.controller.signal, AbortSignal.timeout(15000)]),
+            );
+            if (!connection.controller.signal.aborted && activeTurn.current === turn) {
+                setState((current) => updateHistory(current, turn.client, history));
+                activeTurn.current = null;
+                setSending({ kind: "idle" });
+            }
+        } catch (cause) {
+            if (!connection.controller.signal.aborted && activeTurn.current === turn) {
+                setSending({
+                    kind: "stop-failed",
+                    turnId: turn.turnId,
+                    message: cause instanceof Error ? cause.message : "The agent output could not be stopped.",
+                });
+            }
         }
     };
 
@@ -461,6 +530,7 @@ export function BotChatHome({
                     }
                     botId={active.bot.botId}
                     requests={requests}
+                    createTransfer={createTransfer}
                     onOpen={(session) => openManaged(session.kind, session.id)}
                     onFork={(session) => {
                         if (session.result.action === "fork") {
@@ -491,9 +561,15 @@ export function BotChatHome({
                         aria-label="Messages"
                     >
                         <div ref={messageContent} className="flex min-h-full flex-col gap-8">
-                            {state.kind === "loading" ? (
+                            {state.kind === "loading" || state.kind === "switching" ? (
                                 <div className="m-auto">
-                                    <Spinner label="Connecting to your agent" />
+                                    <Spinner
+                                        label={
+                                            state.kind === "switching"
+                                                ? "Switching session"
+                                                : "Connecting to your agent"
+                                        }
+                                    />
                                 </div>
                             ) : state.kind === "setup" ? (
                                 <section className="m-auto w-full max-w-lg animate-cloud-enter rounded-2xl border border-border bg-card p-8 shadow-sm motion-reduce:animate-none">
@@ -541,18 +617,26 @@ export function BotChatHome({
                             )}
                         </div>
                     </div>
-                    {active !== null && (
+                    {active !== null && !switching && (
                         <BotChatComposer
                             attachments={attachments}
                             disabled={switching || sending.kind === "sending"}
                             draft={draft}
-                            error={sending.kind === "failed" ? sending.message : ""}
+                            error={sending.kind === "failed" || sending.kind === "stop-failed" ? sending.message : ""}
                             onAttachmentsChange={setAttachments}
                             onDraftChange={setDraft}
+                            onStop={() => void stop()}
                             onSubmit={() => void send()}
+                            outputState={
+                                sending.kind === "running" || sending.kind === "stop-failed"
+                                    ? "running"
+                                    : sending.kind === "stopping"
+                                      ? "stopping"
+                                      : "idle"
+                            }
                             submitDisabled={
                                 switching ||
-                                sending.kind === "sending" ||
+                                (sending.kind !== "idle" && sending.kind !== "failed") ||
                                 (draft.trim().length === 0 && attachments.length === 0) ||
                                 (active.kind === "draft" && draftSettings === null)
                             }

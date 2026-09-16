@@ -20,8 +20,60 @@ test("Given a paired workspace, When a user adds a file from the composer menu, 
         buffer: Buffer.from("# Project notes\nKeep the reply brief."),
     });
     await expect(page.getByText("project-notes.md", { exact: true })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Harness", exact: true })).toBeEnabled();
     await expect(page.getByRole("combobox", { name: "Model", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: /microphone|whisper/iu })).toHaveCount(0);
+});
+
+test("Given a paired workspace, When the user shares their machine, Then Chat provides a fresh five-use QR link", async ({
+    runtime,
+}) => {
+    await runtime.openPairedChat();
+    const { page } = runtime;
+    await page.getByRole("button", { name: "Share My Machine", exact: true }).click();
+    let share = page.getByRole("dialog", { name: "Share My Machine", exact: true });
+    await expect(share.getByRole("img", { name: "Machine sharing QR code", exact: true })).toBeVisible();
+    const firstUrl = await share.getByRole("link", { name: "Open sharing link", exact: true }).getAttribute("href");
+    assert.match(firstUrl ?? "", /\/continue#code=/u);
+    await expect(share.getByText(/used up to five times/iu)).toBeVisible();
+
+    await share.getByRole("button", { name: "Close dialog", exact: true }).click();
+    await page.getByRole("button", { name: "Share My Machine", exact: true }).click();
+    share = page.getByRole("dialog", { name: "Share My Machine", exact: true });
+    const secondUrl = await share.getByRole("link", { name: "Open sharing link", exact: true }).getAttribute("href");
+    assert.match(secondUrl ?? "", /\/continue#code=/u);
+    assert.notEqual(secondUrl, firstUrl);
+});
+
+test("Given an agent returns an image, When its reply is displayed, Then the image is available in the conversation", async ({
+    runtime,
+}) => {
+    await runtime.openPairedChat();
+    const { page } = runtime;
+    await runtime.sendMessage("generate markdown image");
+    const image = page.getByRole("img", { name: "generated-image.png", exact: true });
+    await expect(image).toBeVisible();
+    await expect(image).toHaveAttribute("src", /^blob:/u);
+});
+
+test("Given an agent is producing a reply, When the user stops it from the composer, Then the reply is cancelled and the composer can send again", async ({
+    runtime,
+}) => {
+    await runtime.openPairedChat();
+    const { page } = runtime;
+    await runtime.sendMessage("wait until cancelled");
+    const stop = page.getByRole("button", { name: "Stop agent output", exact: true });
+    await expect(stop).toBeVisible();
+    const cancellation = page.waitForResponse(
+        (response) =>
+            response.request().method() === "POST" &&
+            /\/client\/session\/turns\/[^/]+\/cancel$/u.test(new URL(response.url()).pathname),
+    );
+    await stop.click();
+    expect((await cancellation).status()).toBe(200);
+    await expect(page.getByText("Response cancelled.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeVisible();
 });
 
 test("Given a full message viewport, When the user sends another prompt, Then the new turn is brought into view", async ({
@@ -141,7 +193,7 @@ test("Given a paired workspace, When a user creates and reloads conversations, T
     await expect(page.getByTestId(dataTestId.agentResponse).nth(1)).toContainText(followUp);
     expect(page.url()).toBe(savedUrl);
     await expect(page.getByTestId(dataTestId.userMessage)).toHaveText(["Second conversation", followUp]);
-    await test.step("Given Chat-created conversations, When the user switches sessions, Then Chat stays mounted and local sessions can be previewed and forked", async () => {
+    await test.step("Given Chat-created conversations, When the user switches sessions, Then stale content is replaced by a spinner and local sessions can be previewed and forked", async () => {
         const sidebar = page.getByRole("complementary", { name: "Conversations", exact: true });
         await expect(sidebar.getByRole("button", { name: "First conversation", exact: true })).toBeVisible();
         const originalComposer = await page.getByTestId(dataTestId.messageComposer).elementHandle();
@@ -149,11 +201,12 @@ test("Given a paired workspace, When a user creates and reloads conversations, T
         assert.ok(originalComposer);
         assert.ok(originalSidebar);
         await sidebar.getByRole("button", { name: "First conversation", exact: true }).click();
-        expect(await originalComposer.evaluate((element) => element.isConnected)).toBe(true);
+        await expect(page.getByRole("status", { name: "Switching session", exact: true })).toBeVisible();
+        await expect(page.getByText(followUp, { exact: true })).toHaveCount(0);
+        expect(await originalComposer.evaluate((element) => element.isConnected)).toBe(false);
         expect(await originalSidebar.evaluate((element) => element.isConnected)).toBe(true);
-        await expect(page.getByText("Connecting to your agent", { exact: true })).toHaveCount(0);
         await expect(page.getByTestId(dataTestId.userMessage)).toHaveText(["First conversation"]);
-        expect(await originalComposer.evaluate((element) => element.isConnected)).toBe(true);
+        await expect(page.getByRole("status", { name: "Switching session", exact: true })).toHaveCount(0);
         expect(await originalSidebar.evaluate((element) => element.isConnected)).toBe(true);
         await originalComposer.dispose();
         await originalSidebar.dispose();
