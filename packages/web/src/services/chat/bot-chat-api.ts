@@ -198,6 +198,19 @@ export class BotChatApi {
             v.object({ turnId: identifier }),
             await this.#request(botId, "turns", { sessionId: v.parse(identifier, sessionId), ...request }, signal),
         );
+    readonly steerTurn = async (
+        botId: string,
+        sessionId: string,
+        turnId: string,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        await this.#request(
+            botId,
+            "turns/steer",
+            { sessionId: v.parse(identifier, sessionId), turnId: v.parse(identifier, turnId) },
+            signal,
+        );
+    };
     readonly conversationSession = (access: ChatAccess, activeTurn: ConversationActiveTurn) => ({
         agentRef: access.agentRef,
         result: {
@@ -347,11 +360,27 @@ export class BotChatApi {
     };
 
     readonly connectSession = async (botId: string, sessionId: string, signal: AbortSignal): Promise<MobiusClient> => {
-        const readAccess = async (parent: AbortSignal) =>
-            v.parse(
-                sessionAccessSchema,
-                await this.#request(botId, "session-access", { sessionId: v.parse(identifier, sessionId) }, parent),
-            );
+        const readAccess = async (parent: AbortSignal) => {
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+                try {
+                    return v.parse(
+                        sessionAccessSchema,
+                        await this.#request(
+                            botId,
+                            "session-access",
+                            { sessionId: v.parse(identifier, sessionId) },
+                            parent,
+                        ),
+                    );
+                } catch (cause) {
+                    parent.throwIfAborted();
+                    if (!(cause instanceof CloudApiError) || cause.code !== "CHAT_UNAVAILABLE" || attempt === 1) {
+                        throw cause;
+                    }
+                }
+            }
+            throw new CloudApiError("CHAT_UNAVAILABLE", "Chat is unavailable.");
+        };
         let access = await readAccess(signal);
         const endpoint = sessionEndpoint(access.endpoint);
         const projectId = access.projectId;

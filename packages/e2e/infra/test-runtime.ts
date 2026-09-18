@@ -49,6 +49,7 @@ export async function createTestRuntime(harness: E2EHarness) {
         const sendMessage = async (prompt: string) => {
             await page.getByTestId(dataTestId.messageComposer).fill(prompt);
             await page.getByTestId(dataTestId.sendMessage).click();
+            await page.getByTestId(dataTestId.userMessage).filter({ hasText: prompt }).last().waitFor();
         };
 
         return {
@@ -56,7 +57,6 @@ export async function createTestRuntime(harness: E2EHarness) {
             origin: stack.chatOrigin,
             openChat,
             sendMessage,
-            cancelSessionTurn: (sessionId: string, turnId: string) => chat.cancelSessionTurn(sessionId, turnId),
             seedNativeSession: async (sessionId: string, prompt: string) => {
                 await writeFile(
                     join(harness.workDirectory, "agent-state", `${encodeURIComponent(sessionId)}.json`),

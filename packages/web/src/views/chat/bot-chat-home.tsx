@@ -11,6 +11,7 @@ import { MessageSquare } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { BotChatComposer, type ComposerAttachment } from "../../components/chat/bot-chat-composer.tsx";
 import { Button } from "../../components/ui/cloud-button.tsx";
+import { Dialog } from "../../components/ui/dialog.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { type RecordedAgentActivity, recordAgentActivity } from "../../services/chat/agent-activities.ts";
 import type { BotChatApi, ChatDraftConfiguration, ChatWorkspace } from "../../services/chat/bot-chat-api.ts";
@@ -148,6 +149,7 @@ export function BotChatHome({
         | "nativeSession"
         | "managedSessions"
         | "managedSession"
+        | "steerTurn"
         | "continueNativeSession"
         | "connectSession"
         | "createPairingInstruction"
@@ -162,6 +164,7 @@ export function BotChatHome({
     const [conversationSessions] = useState(() => createConversationSessionStore(requests));
     const [state, setState] = useState<State>({ kind: "loading" });
     const [revision, retry] = useState(0);
+    const [pairingDialogOpen, setPairingDialogOpen] = useState(false);
     const [draft, setDraft] = useState("");
     const [attachments, setAttachments] = useState<readonly ComposerAttachment[]>([]);
     const [initialTarget] = useState<
@@ -665,9 +668,22 @@ export function BotChatHome({
                                             Fork session instead
                                         </Button>
                                     ) : (
-                                        <Button onClick={() => retry((value) => value + 1)}>Reconnect</Button>
+                                        <div className="flex flex-wrap justify-center gap-2">
+                                            <Button onClick={() => retry((value) => value + 1)}>Reconnect</Button>
+                                            <Button variant="outline" onClick={() => setPairingDialogOpen(true)}>
+                                                Pair again
+                                            </Button>
+                                        </div>
                                     )}
-                                    <PairingInstruction requests={requests} />
+                                    {pairingDialogOpen && (
+                                        <Dialog
+                                            title="Pair agent again"
+                                            description="Paste this one-time instruction into your local agent, then return here after it connects."
+                                            onClose={() => setPairingDialogOpen(false)}
+                                        >
+                                            <PairingInstruction requests={requests} />
+                                        </Dialog>
+                                    )}
                                 </div>
                             ) : active === null ? null : active.kind === "draft" ||
                               active.history.turns.length === 0 ? (

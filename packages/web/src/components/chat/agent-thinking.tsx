@@ -1,8 +1,9 @@
-import { Brain, ChevronDown, LoaderCircle } from "lucide-react";
+import { Brain, ChevronDown, LoaderCircle, Wrench } from "lucide-react";
+import { useEffect, useRef } from "react";
 import type { ThinkingPresentation } from "../../services/chat/agent-reply.ts";
 import { AgentMarkdown } from "../agents/agent-markdown.tsx";
 
-function WorkingIndicator() {
+export function AgentWorkingIndicator() {
     return (
         <span role="status" aria-label="Agent working" className="inline-flex items-center gap-2">
             <LoaderCircle
@@ -14,48 +15,79 @@ function WorkingIndicator() {
     );
 }
 
-function WorkingLabel({ status }: { readonly status: "working" | "thinking" }) {
-    return (
-        <div className="flex min-h-8 items-center gap-2 px-2 text-xs text-muted-foreground">
-            <WorkingIndicator />
-            <span>{status === "thinking" ? "Thinking…" : "Working…"}</span>
-        </div>
-    );
-}
-
-export function AgentThinking({ entries, status }: ThinkingPresentation) {
-    if (entries.length === 0) {
-        return status === "idle" ? null : <WorkingLabel status={status} />;
+export function AgentThinking({ autoOpen, entries }: ThinkingPresentation) {
+    const disclosure = useRef<HTMLDetailsElement>(null);
+    const hasEntries = entries.length > 0;
+    useEffect(() => {
+        if (hasEntries && disclosure.current !== null) {
+            disclosure.current.open = autoOpen;
+        }
+    }, [autoOpen, hasEntries]);
+    if (!hasEntries) {
+        return null;
     }
-    const thinking = status === "thinking";
     return (
         <div className="min-w-0 text-sm text-muted-foreground">
-            <details aria-label="Agent thinking" className="group/thinking min-w-0">
+            <details aria-label="Agent thinking" className="group/thinking min-w-0" ref={disclosure}>
                 <summary className="flex min-h-10 w-fit cursor-pointer list-none items-center gap-2 rounded-lg px-1 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
                     <ChevronDown
                         aria-hidden="true"
                         className="size-3.5 -rotate-90 transition-transform group-open/thinking:rotate-0 motion-reduce:transition-none"
                     />
-                    <span>{thinking ? "Show intermediate steps · Thinking…" : "Show intermediate steps"}</span>
-                    {thinking && <WorkingIndicator />}
+                    <span>Show intermediate steps</span>
                 </summary>
                 <div className="mt-1 ml-1 min-w-0 border-l border-[#d9dde1] py-2 pl-5 [overflow-wrap:anywhere]">
-                    <div className="mb-3 flex items-center gap-2 text-sm text-copy-secondary">
-                        <Brain aria-hidden="true" className="size-4" />
-                        <span>Thinking</span>
-                    </div>
-                    <div className="grid min-w-0 gap-3 text-muted-foreground">
+                    <div className="grid min-w-0 gap-4 text-muted-foreground">
                         {entries.map((entry) => (
-                            <AgentMarkdown
-                                key={entry.id}
-                                markdown={entry.text}
-                                streaming={entry.status === "streaming"}
-                            />
+                            <section className="min-w-0" key={entry.id}>
+                                {entry.kind === "reasoning" ? (
+                                    <div className="grid min-w-0 gap-2">
+                                        <div className="flex items-center gap-2 text-sm text-copy-secondary">
+                                            <Brain aria-hidden="true" className="size-4" />
+                                            <span>Thinking</span>
+                                        </div>
+                                        <AgentMarkdown markdown={entry.text} streaming={entry.status === "streaming"} />
+                                    </div>
+                                ) : (
+                                    <details aria-label={`Tool: ${entry.title}`} className="group/tool min-w-0">
+                                        <summary
+                                            className="flex min-h-8 w-full min-w-0 cursor-pointer list-none items-center gap-2 rounded-lg px-1 text-sm text-copy-secondary outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                                            title={entry.title}
+                                        >
+                                            <ChevronDown
+                                                aria-hidden="true"
+                                                className="size-4 shrink-0 -rotate-90 transition-transform group-open/tool:rotate-0 motion-reduce:transition-none"
+                                            />
+                                            <Wrench aria-hidden="true" className="size-4 shrink-0" />
+                                            <span className="min-w-0 flex-1 truncate whitespace-nowrap">
+                                                {entry.title}
+                                            </span>
+                                        </summary>
+                                        <div className="mt-1 ml-5 grid min-w-0 gap-2 text-xs">
+                                            {entry.input.length > 0 && (
+                                                <div className="grid gap-1">
+                                                    <span className="font-medium text-copy-tertiary">Request</span>
+                                                    <pre className="overflow-x-auto rounded-lg bg-black/[0.035] p-2 whitespace-pre-wrap">
+                                                        {entry.input}
+                                                    </pre>
+                                                </div>
+                                            )}
+                                            {entry.output.length > 0 && (
+                                                <div className="grid gap-1">
+                                                    <span className="font-medium text-copy-tertiary">Response</span>
+                                                    <pre className="overflow-x-auto rounded-lg bg-black/[0.035] p-2 whitespace-pre-wrap">
+                                                        {entry.output}
+                                                    </pre>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </details>
+                                )}
+                            </section>
                         ))}
                     </div>
                 </div>
             </details>
-            {status === "working" && <WorkingLabel status="working" />}
         </div>
     );
 }

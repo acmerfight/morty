@@ -1,6 +1,6 @@
 import type { PromptImage, PromptResource } from "@moxt-ai/mobius-sdk";
 import { FileText, LoaderCircle, Paperclip, Plus, Send, Square, X } from "lucide-react";
-import { type FormEvent, type ReactNode, useRef, useState } from "react";
+import { type FormEvent, type KeyboardEvent, type ReactNode, useRef, useState } from "react";
 import { dataTestId } from "../../data-testid.ts";
 import {
     AttachmentReadError,
@@ -9,6 +9,7 @@ import {
     readPromptAttachment,
 } from "../../services/chat/attachment-reader.ts";
 import { Button } from "../ui/cloud-button.tsx";
+import { Popover } from "../ui/popover.tsx";
 import { Textarea } from "../ui/textarea.tsx";
 
 export type ComposerAttachment =
@@ -57,6 +58,7 @@ function AttachmentPreview({
 
 export function BotChatComposer({
     attachments,
+    actions,
     children,
     disabled,
     draft,
@@ -72,6 +74,7 @@ export function BotChatComposer({
     submitDisabled,
 }: {
     readonly attachments: readonly ComposerAttachment[];
+    readonly actions?: ReactNode;
     readonly children: ReactNode;
     readonly disabled: boolean;
     readonly draft: string;
@@ -80,7 +83,7 @@ export function BotChatComposer({
     readonly onDraftChange: (draft: string) => void;
     readonly onStop: () => void;
     readonly onSubmit: () => void;
-    readonly outputState: "idle" | "running" | "stopping";
+    readonly outputState: "idle" | "sending" | "running" | "stopping";
     readonly messageLabel?: string;
     readonly placeholder?: string;
     readonly submitLabel?: string;
@@ -138,8 +141,35 @@ export function BotChatComposer({
         }
     };
 
+    const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+        if (event.key === "Enter" && event.ctrlKey && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            event.currentTarget.setRangeText(
+                "\n",
+                event.currentTarget.selectionStart,
+                event.currentTarget.selectionEnd,
+                "end",
+            );
+            onDraftChange(event.currentTarget.value);
+            return;
+        }
+        if (
+            event.key !== "Enter" ||
+            event.shiftKey ||
+            event.ctrlKey ||
+            event.metaKey ||
+            event.altKey ||
+            event.nativeEvent.isComposing
+        ) {
+            return;
+        }
+        event.preventDefault();
+        event.currentTarget.form?.requestSubmit();
+    };
+    const submitAction = outputState === "idle" || (outputState === "running" && !submitDisabled);
+
     return (
-        <form className="mx-auto mb-5 w-full max-w-[976px] shrink-0 px-4 sm:mb-6" onSubmit={submit}>
+        <form className="mx-auto mt-5 mb-5 w-full max-w-[976px] shrink-0 px-4 sm:mt-6 sm:mb-6" onSubmit={submit}>
             {(error.length > 0 || attachmentState.kind === "failed") && (
                 <p className="mb-2 px-1 text-sm text-destructive" role="alert">
                     {error.length > 0 ? error : attachmentState.kind === "failed" ? attachmentState.message : ""}
@@ -158,35 +188,40 @@ export function BotChatComposer({
                     </ul>
                 )}
                 <Textarea
+                    aria-describedby="chat-composer-keyboard-hint"
                     aria-label={messageLabel}
                     className="min-h-[62px] px-1 py-1 text-base sm:min-h-[72px]"
                     data-testid={dataTestId.messageComposer}
                     disabled={disabled}
                     onChange={(event) => onDraftChange(event.target.value)}
+                    onKeyDown={handleKeyDown}
                     placeholder={placeholder}
                     value={draft}
                 />
                 <div className="mt-1 flex min-h-10 items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-1">
-                        <div className="relative">
-                            <button
-                                aria-label="Add"
-                                aria-expanded={addMenuOpen}
-                                className="flex size-10 items-center justify-center rounded-full text-copy-secondary outline-none hover:bg-black/[0.045] focus-visible:ring-2 focus-visible:ring-ring/60 aria-expanded:bg-black/[0.045]"
-                                onClick={() => setAddMenuOpen((open) => !open)}
-                                title="Add"
-                                type="button"
-                            >
-                                {attachmentState.kind === "reading" ? (
-                                    <LoaderCircle className="size-5 animate-spin motion-reduce:animate-none" />
-                                ) : (
-                                    <Plus className="size-5" />
-                                )}
-                            </button>
-                            {addMenuOpen && (
-                                <div
-                                    className="absolute bottom-[calc(100%+10px)] left-0 z-30 w-56 rounded-2xl border border-[#d5d9dc] bg-white p-1.5 shadow-[0_16px_42px_rgba(0,0,0,0.14)]"
+                        <Popover.Root onOpenChange={setAddMenuOpen} open={addMenuOpen}>
+                            <Popover.Trigger asChild>
+                                <button
+                                    aria-label="Add"
+                                    className="flex size-10 items-center justify-center rounded-full text-copy-secondary outline-none hover:bg-black/[0.045] focus-visible:ring-2 focus-visible:ring-ring/60 data-[state=open]:bg-black/[0.045]"
+                                    title="Add"
+                                    type="button"
+                                >
+                                    {attachmentState.kind === "reading" ? (
+                                        <LoaderCircle className="size-5 animate-spin motion-reduce:animate-none" />
+                                    ) : (
+                                        <Plus className="size-5" />
+                                    )}
+                                </button>
+                            </Popover.Trigger>
+                            <Popover.Portal>
+                                <Popover.Content
+                                    align="start"
+                                    className="z-50 w-56 rounded-2xl border border-[#d5d9dc] bg-white p-1.5 shadow-[0_16px_42px_rgba(0,0,0,0.14)]"
                                     role="menu"
+                                    side="top"
+                                    sideOffset={10}
                                 >
                                     <button
                                         className="flex min-h-10 w-full items-center gap-3 rounded-xl bg-black/[0.035] px-3 text-left text-sm hover:bg-black/[0.06] focus-visible:ring-2 focus-visible:ring-ring/60"
@@ -203,9 +238,9 @@ export function BotChatComposer({
                                         <Paperclip aria-hidden="true" className="size-4 text-copy-secondary" />
                                         Add attachment
                                     </button>
-                                </div>
-                            )}
-                        </div>
+                                </Popover.Content>
+                            </Popover.Portal>
+                        </Popover.Root>
                         <input
                             accept="image/png,image/jpeg,image/gif,image/webp,text/*,.md,.json,.csv,.yaml,.yml,.xml"
                             className="sr-only"
@@ -221,34 +256,53 @@ export function BotChatComposer({
                         />
                         <div className="flex min-w-0 items-center gap-1 overflow-x-auto">{children}</div>
                     </div>
-                    <Button
-                        aria-label={
-                            outputState === "running"
-                                ? "Stop agent output"
-                                : outputState === "stopping"
-                                  ? "Stopping agent output"
-                                  : submitLabel
-                        }
-                        className={`size-10 rounded-full text-white ${outputState === "idle" ? "bg-[#2fbd7a] hover:bg-[#28aa6c]" : "bg-[#e65c5c] hover:bg-[#d94d4d]"}`}
-                        data-testid={dataTestId.sendMessage}
-                        disabled={outputState === "stopping" || (outputState === "idle" && submitDisabled)}
-                        onClick={outputState === "running" ? onStop : undefined}
-                        size="icon"
-                        type={outputState === "idle" ? "submit" : "button"}
-                    >
-                        {outputState === "idle" ? (
-                            <Send aria-hidden="true" className="size-[18px]" />
-                        ) : outputState === "running" ? (
-                            <Square aria-hidden="true" className="size-3.5 fill-current" />
-                        ) : (
-                            <LoaderCircle
-                                aria-hidden="true"
-                                className="size-[18px] animate-spin motion-reduce:animate-none"
-                            />
-                        )}
-                    </Button>
+                    <div className="flex shrink-0 items-center gap-1">
+                        {actions}
+                        <Button
+                            aria-busy={outputState === "sending"}
+                            aria-label={
+                                outputState === "sending"
+                                    ? "Sending message"
+                                    : outputState === "stopping"
+                                      ? "Stopping agent output"
+                                      : submitAction
+                                        ? submitLabel
+                                        : "Stop agent output"
+                            }
+                            className={`size-10 rounded-full text-white ${submitAction || outputState === "sending" ? "bg-[#2fbd7a] hover:bg-[#28aa6c]" : "bg-[#e65c5c] hover:bg-[#d94d4d]"}`}
+                            data-testid={dataTestId.sendMessage}
+                            disabled={
+                                outputState === "sending" ||
+                                outputState === "stopping" ||
+                                (outputState === "idle" && submitDisabled)
+                            }
+                            onClick={outputState === "running" && !submitAction ? onStop : undefined}
+                            size="icon"
+                            type={submitAction ? "submit" : "button"}
+                        >
+                            {submitAction ? (
+                                <Send aria-hidden="true" className="size-[18px]" />
+                            ) : outputState === "running" ? (
+                                <Square aria-hidden="true" className="size-3.5 fill-current" />
+                            ) : outputState === "sending" ? (
+                                <LoaderCircle
+                                    aria-label="Sending message"
+                                    className="size-[18px] animate-spin motion-reduce:animate-none"
+                                    role="status"
+                                />
+                            ) : (
+                                <LoaderCircle
+                                    aria-hidden="true"
+                                    className="size-[18px] animate-spin motion-reduce:animate-none"
+                                />
+                            )}
+                        </Button>
+                    </div>
                 </div>
             </div>
+            <span className="sr-only" id="chat-composer-keyboard-hint">
+                Enter to send. Shift or Control plus Enter inserts a new line.
+            </span>
         </form>
     );
 }
