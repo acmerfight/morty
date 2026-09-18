@@ -490,6 +490,7 @@ export class BotChatApi {
             throw new CloudApiError(
                 parsed.success ? parsed.output.error.code : "CHAT_UNAVAILABLE",
                 parsed.success ? parsed.output.error.message : "Chat is unavailable.",
+                response.status,
             );
         }
         return value;
