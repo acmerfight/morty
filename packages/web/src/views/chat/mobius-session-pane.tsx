@@ -14,6 +14,7 @@ import {
     SessionInteractionCards,
 } from "../../components/chat/session-interactions.tsx";
 import { Button } from "../../components/ui/cloud-button.tsx";
+import { LoadMoreTrigger } from "../../components/utils/load-more-trigger.tsx";
 import { registerMobiusChatDebugSession } from "../../debug-bridge.ts";
 import type { BotChatApi } from "../../services/chat/bot-chat-api.ts";
 import type { SessionConnectionKind } from "../../view-models/chat/bot-chat-home-store.ts";
@@ -100,7 +101,11 @@ export function MobiusSessionPane({
         if (followLatest.current && messageList.current !== null) {
             messageList.current.scrollTop = messageList.current.scrollHeight;
         }
-    }, [model.messages]);
+    }, [model.messages.length]);
+    const loadOlderMessages = useCallback(
+        async (signal: AbortSignal) => await pane.store.getState().loadOlderMessages(signal),
+        [pane],
+    );
 
     const run = (action: (signal: AbortSignal) => Promise<void>) => {
         const controller = lifetime.current;
@@ -236,6 +241,13 @@ export function MobiusSessionPane({
                         />
                     </div>
                 </div>
+                <LoadMoreTrigger
+                    container={messageList}
+                    hasMore={model.hasOlderHistory}
+                    loading={model.historyLoading}
+                    onLoadMore={loadOlderMessages}
+                    revision={model.messages.length}
+                />
                 <ChatMessageQueue
                     messages={messageQueue.messages}
                     steeringSupported={taskControls.steeringSupported}
