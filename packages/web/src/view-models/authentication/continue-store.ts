@@ -1,7 +1,7 @@
 import { createStore } from "zustand/vanilla";
 import { createSelectedBotPreference } from "@/services/bots/selected-bot-preference";
 import { BotChatApi } from "@/services/chat/bot-chat-api";
-import { ANONYMOUS_CREDENTIAL_KEY, AnonymousIdentityApi } from "@/services/identity/anonymous-identity-api";
+import { AnonymousIdentityApi, hasStoredAnonymousCredential } from "@/services/identity/anonymous-identity-api";
 import { ManagementApi } from "@/services/management/management-api";
 
 type Handoff =
@@ -48,7 +48,7 @@ function initialState(): ContinueState {
     }
     const handoff: Handoff =
         harness === null || sessionId === null ? { kind: "workspace" } : { kind: "session", harness, sessionId };
-    const replacesWorkspace = window.localStorage.getItem(ANONYMOUS_CREDENTIAL_KEY) !== null;
+    const replacesWorkspace = hasStoredAnonymousCredential();
     if (handoff.kind === "session" || replacesWorkspace) {
         return { code, handoff, kind: "confirm", replacesWorkspace };
     }
@@ -78,7 +78,6 @@ export const createContinueStore = (fetchRequest: (request: Request) => Promise<
             const api = new AnonymousIdentityApi({
                 fetchRequest,
                 origin: window.location.origin,
-                storage: window.localStorage,
             });
             try {
                 const identity = await api.redeemTransfer(state.code, signal);
@@ -99,7 +98,7 @@ export const createContinueStore = (fetchRequest: (request: Request) => Promise<
                     getToken: async () => identity.token,
                 });
                 const bots = await management.listBots(signal);
-                const preferredBot = createSelectedBotPreference(window.localStorage, identity.projectId).read();
+                const preferredBot = createSelectedBotPreference(identity.projectId).read();
                 const bot = bots.find((candidate) => candidate.botId === preferredBot) ?? bots[0];
                 if (bot === undefined) {
                     throw new Error("Your Bot is unavailable.");
