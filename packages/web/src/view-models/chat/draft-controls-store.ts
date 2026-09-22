@@ -1,6 +1,7 @@
 import type { SessionConfigOption, WorkspaceEntriesEvent } from "@moxt-ai/mobius-protocol";
 import { createStore } from "zustand/vanilla";
 import type { BotChatApi, ChatDraftConfiguration, ChatWorkspace } from "@/services/chat/bot-chat-api";
+import { restoreLastAgentSettings, saveLastAgentSettings } from "@/services/chat/last-agent-settings";
 import {
     forgetRecentCwdPreference,
     type RecentCwdPreference,
@@ -109,6 +110,9 @@ export const createDraftControlsStore = (
         let cwdOperation: AbortController | null = null;
         let selectedHarness = "";
         const changedOptionIds = new Set<string>();
+        const rememberAgentSettings = (settings: Extract<DraftSettingsState, { readonly kind: "ready" }>): void => {
+            saveLastAgentSettings(storage, botId, settings.selectedAgent.agentRef, settings.options);
+        };
         const publishSettings = (settings: Extract<DraftSettingsState, { readonly kind: "ready" }>): void => {
             onSettings({
                 agentRef: settings.selectedAgent.agentRef,
@@ -266,8 +270,23 @@ export const createDraftControlsStore = (
                                 signal.throwIfAborted();
                             }
                         }
-                        const ready = { kind: "ready" as const, workspace, selectedAgent: selected, cwd, ...result };
+                        const restoredSettings = restoreLastAgentSettings(
+                            storage,
+                            botId,
+                            selected.agentRef,
+                            result.options,
+                        );
+                        const ready = {
+                            kind: "ready" as const,
+                            workspace,
+                            selectedAgent: selected,
+                            cwd,
+                            options: restoredSettings.options,
+                        };
                         changedOptionIds.clear();
+                        for (const configId of restoredSettings.restoredIds) {
+                            changedOptionIds.add(configId);
+                        }
                         const existingRecentCwds = readRecentCwdPreferences(
                             storage,
                             botId,
@@ -466,6 +485,7 @@ export const createDraftControlsStore = (
                     ),
                 };
                 changedOptionIds.add(configId);
+                rememberAgentSettings(ready);
                 set({ settings: ready });
                 publishSettings(ready);
             },
@@ -483,6 +503,7 @@ export const createDraftControlsStore = (
                     ),
                 };
                 changedOptionIds.add(configId);
+                rememberAgentSettings(ready);
                 set({ settings: ready });
                 publishSettings(ready);
             },

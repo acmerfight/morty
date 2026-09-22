@@ -78,6 +78,7 @@ test("Given a paired workspace, When a user works across conversations, Then sen
         await expect(page).toHaveURL(/\?conversationId=/u);
         await expect(page.getByRole("list", { name: "Attachments", exact: true })).toHaveCount(0);
         await expect(page.getByTestId(dataTestId.agentResponse).first()).toContainText("First conversation");
+        await expect(page.getByTestId(dataTestId.agentReplyStatus)).toHaveCount(0);
         await expect(page.getByTestId(dataTestId.workingIndicator)).toHaveCount(0);
         await expect(page.getByTestId(dataTestId.sendMessage)).toHaveAttribute("aria-label", "Send message");
         await expect(page.getByTestId(dataTestId.recognizedReadToolCall).first()).toContainText(
@@ -149,6 +150,15 @@ test("Given a paired workspace, When a user works across conversations, Then sen
         await expect(
             page.getByTestId(dataTestId.agentToolCall).filter({ hasText: "Agent error" }).last(),
         ).toContainText("Agent could not inspect the optional workspace file");
+    });
+
+    await test.step("show a cancelled response after the user stops the agent", async () => {
+        await page.getByTestId(dataTestId.newConversation).click();
+        await runtime.sendMessage("wait until cancelled");
+        const stop = page.getByTestId(dataTestId.sendMessage);
+        await expect(stop).toHaveAttribute("aria-label", "Stop agent output");
+        await stop.click();
+        await expect(page.getByTestId(dataTestId.agentReplyStatus)).toHaveText("Response cancelled.");
     });
 
     await test.step("queue a follow-up while the agent is working", async () => {

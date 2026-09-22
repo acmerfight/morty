@@ -26,6 +26,7 @@ import {
     recordAgentActivity,
 } from "../../services/chat/agent-activities.ts";
 import type { BotChatApi } from "../../services/chat/bot-chat-api.ts";
+import { saveLastAgentSettings } from "../../services/chat/last-agent-settings.ts";
 import type { ComposerAttachment } from "./composer-attachment.ts";
 import type { OpenMobiusSession } from "./open-session.ts";
 import { createRemoteAccessStore } from "./remote-access-store.ts";
@@ -292,10 +293,19 @@ export function sessionPanePresentation(
         queue.operation.kind === "submitting" ||
         tasks.operation.kind === "steering" ||
         tasks.operation.kind === "stopping";
-    const activeCommandId = workingCommandId(model.activity);
+    const workingActivityCommandId = workingCommandId(model.activity);
+    const submittingCommandId = model.operation.kind === "sending" ? model.operation.commandId : null;
+    const activeCommandId = workingActivityCommandId ?? submittingCommandId;
     const busy = activeCommandId !== null || composerDisabled;
     const compactAvailable = findCompactCommand(tasks.commands) !== null;
-    const activeMessageId = model.activity.kind === "working" ? model.activity.messageId : null;
+    const activeMessageId =
+        model.activity.kind === "working"
+            ? model.activity.messageId
+            : submittingCommandId !== null
+              ? (model.messages.findLast(
+                    (message) => message.role === "assistant" && message.commandId === submittingCommandId,
+                )?.id ?? null)
+              : null;
     const deliveryUnknownCommandId =
         delivery.state.kind === "delivery-unknown" ? delivery.state.journal.commandId : null;
     const deliveryUnknownUserMessageId =
@@ -305,6 +315,7 @@ export function sessionPanePresentation(
                   ?.id ?? null);
     return {
         activeMessageId,
+        activeCommandId,
         busy,
         composerDisabled,
         compactAvailable,
@@ -1184,6 +1195,7 @@ export function createSessionPaneModel(options: {
                         value: candidate.type === "select" ? candidate.currentValue : "",
                         valueType: candidate.type,
                     }));
+                    saveLastAgentSettings(options.storage, botId, session.agentRef, result.configOptions);
                     set({ options: result.configOptions, operation: { kind: "idle" } });
                 } catch (cause) {
                     signal.throwIfAborted();
