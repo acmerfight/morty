@@ -7,9 +7,6 @@ export const chatManagedSession = sqliteTable(
         userId: text("user_id").notNull(),
         botId: text("bot_id").notNull(),
         resourceId: text("resource_id").notNull(),
-        directoryId: text("directory_id").notNull().default("default"),
-        additionalDirectoryIdsJson: text("additional_directory_ids_json").notNull().default("[]"),
-        title: text("title").notNull(),
         createdAt: integer("created_at").notNull(),
     },
     (table) => [

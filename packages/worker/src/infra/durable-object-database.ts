@@ -20,6 +20,7 @@ import addManagedBotAgentRef from "../../migrations/project-do/0019_grey_clea.sq
 import addLocalSessionDirectories from "../../migrations/project-do/0020_minor_vision.sql?raw";
 import simplifySlackBinding from "../../migrations/project-do/0021_black_hairball.sql?raw";
 import simplifyChatSessionAndSlackBinding from "../../migrations/project-do/0022_eminent_wiccan.sql?raw";
+import removeLocalSessionMetadata from "../../migrations/project-do/0024_fair_blizzard.sql?raw";
 
 const migrations = [
     management,
@@ -44,6 +45,7 @@ const migrations = [
     addLocalSessionDirectories,
     simplifySlackBinding,
     simplifyChatSessionAndSlackBinding,
+    removeLocalSessionMetadata,
 ];
 
 type BoundValue = ArrayBuffer | string | number | null;

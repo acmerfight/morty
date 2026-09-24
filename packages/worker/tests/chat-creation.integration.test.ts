@@ -99,6 +99,9 @@ test("Given a Bot with an existing Codex Session, When its owner selects Claude 
         });
         expect(created.status).toBe(200);
         const { sessionId } = v.parse(v.object({ sessionId: v.string() }), await created.json());
+        const sessions = await fixture.request(`chat/bots/${fixture.botId}/local-sessions`, {});
+        expect(sessions.status).toBe(200);
+        expect(await sessions.json()).toMatchObject({ sessions: [{ id: sessionId }] });
 
         const changed = await configure("claude");
         expect(changed.status).toBe(409);

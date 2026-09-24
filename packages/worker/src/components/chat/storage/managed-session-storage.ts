@@ -9,9 +9,6 @@ const summarySchema = v.pipe(
         projectId: platformIdentifier,
         userId: platformIdentifier,
         id: platformIdentifier,
-        title: v.pipe(v.string(), v.maxLength(500)),
-        directoryId: v.pipe(v.string(), v.minLength(1), v.maxLength(2048)),
-        additionalDirectoryIds: v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(2048))),
     }),
     v.readonly(),
 );
@@ -37,9 +34,6 @@ export class ManagedSessionStorage {
                 projectId: chatManagedSession.projectId,
                 userId: chatManagedSession.userId,
                 id: chatManagedSession.resourceId,
-                title: chatManagedSession.title,
-                directoryId: chatManagedSession.directoryId,
-                additionalDirectoryIdsJson: chatManagedSession.additionalDirectoryIdsJson,
             })
             .from(chatManagedSession)
             .where(
@@ -51,31 +45,18 @@ export class ManagedSessionStorage {
             )
             .orderBy(desc(chatManagedSession.createdAt), chatManagedSession.resourceId);
         signal.throwIfAborted();
-        return v.parse(
-            v.array(summarySchema),
-            result.map((row) => {
-                const additionalDirectoryIds: unknown = JSON.parse(row.additionalDirectoryIdsJson);
-                return { ...row, additionalDirectoryIds };
-            }),
-        );
+        return v.parse(v.array(summarySchema), result);
     };
 
     readonly save = async (
         projectId: string,
         userId: string,
         botId: string,
-        record: {
-            readonly id: string;
-            readonly title: string;
-            readonly directoryId?: string;
-            readonly additionalDirectoryIds?: readonly string[];
-        },
+        record: { readonly id: string },
         signal: AbortSignal,
     ) => {
         const value = v.parse(summarySchema, {
             ...record,
-            directoryId: record.directoryId ?? "default",
-            additionalDirectoryIds: record.additionalDirectoryIds ?? [],
             projectId,
             userId,
         });
@@ -87,9 +68,6 @@ export class ManagedSessionStorage {
                 userId: value.userId,
                 botId,
                 resourceId: value.id,
-                title: value.title,
-                directoryId: value.directoryId,
-                additionalDirectoryIdsJson: JSON.stringify(value.additionalDirectoryIds),
                 createdAt: Date.now(),
             })
             .onConflictDoNothing()

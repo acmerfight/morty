@@ -116,9 +116,6 @@ export class ChatService {
                 }
                 return {
                     sessionId: result.nativeSessionId,
-                    title: "New chat",
-                    directoryId: "default",
-                    additionalDirectoryIds: [],
                 };
             }
             const found = await this.#platform.findNativeSessionByNativeSessionId(
@@ -137,9 +134,6 @@ export class ChatService {
             }
             return {
                 sessionId: found.entry.nativeSessionId,
-                title: found.entry.title || "New chat",
-                directoryId: found.entry.directoryId,
-                additionalDirectoryIds: found.entry.additionalDirectories.map((item) => item.directoryId),
             };
         })();
         const sessionId = selected.sessionId;
@@ -149,9 +143,6 @@ export class ChatService {
             scope.botId,
             {
                 id: sessionId,
-                title: selected.title,
-                directoryId: selected.directoryId,
-                additionalDirectoryIds: selected.additionalDirectoryIds,
             },
             scope.signal,
         );
@@ -162,11 +153,53 @@ export class ChatService {
         return { sessionId, runtimeId: runtime.runtimeId, agentRef: runtime.agentRef };
     };
 
-    readonly localSessions = async (scope: ChatScope) => ({
-        sessions: (await this.#chatSessions.list(scope.projectId, scope.userId, scope.botId, scope.signal)).map(
-            (session) => ({ ...session, directoryLabel: "" }),
-        ),
-    });
+    readonly localSessions = async (scope: ChatScope) => {
+        const runtime = await this.localRuntime(scope);
+        const owned = await this.#chatSessions.list(scope.projectId, scope.userId, scope.botId, scope.signal);
+        if (owned.length === 0) {
+            return { sessions: [] };
+        }
+        const sessions = await Promise.all(
+            owned.map(async (session) => {
+                try {
+                    const found = await this.#platform.findNativeSessionByNativeSessionId(
+                        scope.projectId,
+                        runtime.runtimeId,
+                        {
+                            additionalDirectoryIds: [],
+                            agentId: runtime.agentRef,
+                            directoryId: "default",
+                            nativeSessionId: session.id,
+                        },
+                        scope.signal,
+                    );
+                    return found.entry;
+                } catch (error) {
+                    if (!(error instanceof PlatformProjectError) || error.code !== "native_session_not_found") {
+                        throw error;
+                    }
+                    return {
+                        additionalDirectories: [],
+                        directoryId: "default",
+                        directoryLabel: "",
+                        nativeSessionId: session.id,
+                        title: "New chat",
+                    };
+                }
+            }),
+        );
+        return {
+            sessions: sessions.map((session) => ({
+                additionalDirectoryIds: session.additionalDirectories.map((directory) => directory.directoryId),
+                directoryId: session.directoryId,
+                directoryLabel: session.directoryLabel,
+                id: session.nativeSessionId,
+                projectId: scope.projectId,
+                title: session.title,
+                userId: scope.userId,
+            })),
+        };
+    };
 
     readonly requireLocalSession = async (scope: ChatScope, sessionId: string) => {
         if (
