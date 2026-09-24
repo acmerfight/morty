@@ -66,6 +66,18 @@ export type ChatConversationInput =
           };
       };
 
+const discoveredRuntimeSchema = v.object({
+    agents: v.array(
+        v.object({
+            id: platformIdentifier,
+            label: v.string(),
+        }),
+    ),
+    machineName: v.string(),
+    online: v.boolean(),
+    runtimeId: platformIdentifier,
+});
+
 export class PlatformProjectGateway {
     readonly #bindings: CloudBindings;
     constructor(bindings: CloudBindings) {
@@ -128,6 +140,57 @@ export class PlatformProjectGateway {
                 agents: runtime.agents.map((agent) => ({ agentRef: agent.id, label: agent.label })),
             }));
         });
+
+    readonly getChatRuntimeAgents = async (projectId: string, runtimeId: string, parent: AbortSignal) => {
+        const parsedProjectId = v.parse(platformIdentifier, projectId);
+        const parsedRuntimeId = v.parse(platformIdentifier, runtimeId);
+        const signal = AbortSignal.any([parent, AbortSignal.timeout(15000)]);
+        const endpoint = new URL(this.configuration().origin);
+        endpoint.pathname = `/mobius/api/v1/projects/${encodeURIComponent(parsedProjectId)}/runtimes/${encodeURIComponent(parsedRuntimeId)}/agents`;
+        try {
+            const response = await fetch(endpoint, {
+                headers: {
+                    authorization: `Bearer ${v.parse(platformCredentialBindingsSchema, this.#bindings).MOBIUS_APP_SECRET}`,
+                },
+                signal,
+            });
+            this.#bindings.requestAccessMetrics?.recordMobiusServerTiming(response.headers.get("server-timing"));
+            signal.throwIfAborted();
+            if (!response.ok) {
+                await response.body?.cancel();
+                throw new PlatformProjectError(
+                    response.status === 404 ? "NOT_FOUND" : "PLATFORM_UNAVAILABLE",
+                    "Platform could not read the Runtime's Agents.",
+                    response.status === 404 ? 404 : 502,
+                );
+            }
+            const runtime = v.parse(discoveredRuntimeSchema, await response.json());
+            if (runtime.runtimeId !== parsedRuntimeId) {
+                throw new PlatformProjectError(
+                    "PLATFORM_INVALID_RESPONSE",
+                    "Platform returned Agents for an unexpected Runtime.",
+                    502,
+                );
+            }
+            return {
+                runtimeId: runtime.runtimeId,
+                machineName: runtime.machineName,
+                online: runtime.online,
+                agents: runtime.agents.map((agent) => ({ agentRef: agent.id, label: agent.label })),
+            };
+        } catch (cause) {
+            parent.throwIfAborted();
+            if (signal.aborted) {
+                throw new PlatformProjectError("PLATFORM_TIMEOUT", "Reading Runtime Agents timed out.", 504, { cause });
+            }
+            if (cause instanceof PlatformProjectError) {
+                throw cause;
+            }
+            throw new PlatformProjectError("PLATFORM_UNAVAILABLE", "Platform could not read Runtime Agents.", 502, {
+                cause,
+            });
+        }
+    };
 
     readonly openChatRuntimeHost = async (
         projectId: string,
