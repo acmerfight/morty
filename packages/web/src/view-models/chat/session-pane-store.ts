@@ -39,6 +39,7 @@ import type { OpenMobiusSession } from "./open-session.ts";
 import { createSessionActiveTurn, type SessionActiveTurn } from "./session-active-turn.ts";
 import {
     continueSessionWorkAfterUserMessage,
+    finishSessionWork,
     type SessionActivityState,
     startSessionWork,
     transitionSessionActivity,
@@ -913,6 +914,7 @@ export function createSessionPaneModel(options: {
                                 // Finish this streamed turn without replacing it with a later snapshot.
                                 delivery.getState().reconcile([completedCommand]);
                                 set((current) => ({
+                                    messages: finishSessionWork(current.messages, payload, event.recordedAt),
                                     activity:
                                         payload instanceof MobiusTurnFailedEvent
                                             ? transitionSessionActivity(current.activity, {
