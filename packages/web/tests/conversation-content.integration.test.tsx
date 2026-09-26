@@ -163,3 +163,43 @@ test("Given an Agent links a local file location, When a user opens it, Then the
     expect(content.textContent).toContain("export const generated = true;");
     releaseTurn.resolve();
 });
+
+test("Given a running tool, When the user cancels its turn without a terminal tool event, Then the tool is interrupted and later turns remain usable", {
+    timeout: 30_000,
+}, async () => {
+    const app = await createTestApp({ connectAgent: true, agentBehavior: { toolExecution: "wait-for-cancel" } });
+    await app.queryElementByTestId(
+        dataTestId.botConnectionStatus,
+        (element) => element.textContent?.includes("Connected") === true,
+    );
+    const composer = await app.queryElementByTestId(dataTestId.messageComposer);
+    if (!(composer instanceof HTMLTextAreaElement)) {
+        throw new Error("Expected message composer");
+    }
+    await sendPrompt(app, composer, "Create an image");
+    const tool = await app.queryElementByTestId(dataTestId.agentToolCall);
+    await vi.waitFor(() => expect(getByLabelText(tool, "Tool running")).toBeInstanceOf(SVGElement));
+    const stop = await app.queryElementByTestId(
+        dataTestId.sendMessage,
+        (element) =>
+            element instanceof HTMLButtonElement &&
+            !element.disabled &&
+            element.getAttribute("aria-label") === "Stop agent output",
+    );
+    await app.user.click(stop);
+    await vi.waitFor(() => expect(app.optionalElementByTestId(dataTestId.sessionStatus)).toBeNull());
+    await vi.waitFor(() => expect(getByLabelText(tool, "Tool interrupted")).toBeInstanceOf(SVGElement));
+    const continuedComposer = await app.queryElementByTestId(dataTestId.messageComposer);
+    if (!(continuedComposer instanceof HTMLTextAreaElement)) {
+        throw new Error("Expected active session composer");
+    }
+    await sendPrompt(app, continuedComposer, "Continue after cancellation");
+    await vi.waitFor(() =>
+        expect(
+            app
+                .elementsByTestId(dataTestId.agentResponse)
+                .some((element) => element.textContent?.includes("Continue after cancellation") === true),
+        ).toBe(true),
+    );
+    await vi.waitFor(() => expect(app.optionalElementByTestId(dataTestId.sessionStatus)).toBeNull());
+});
