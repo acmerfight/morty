@@ -9,6 +9,13 @@ type ReasoningThinkingEntry = {
     readonly status: "streaming" | "recorded";
 };
 
+export type NoticeThinkingEntry = {
+    readonly id: string;
+    readonly kind: "notice";
+    readonly severity: "error" | "warning";
+    readonly text: string;
+};
+
 export type ToolThinkingEntry = {
     readonly content: MobiusAgentActivityEvent["content"];
     readonly id: string;
@@ -27,7 +34,7 @@ export type ToolCallState =
     | { readonly kind: "interrupted" }
     | { readonly kind: "unknown" };
 
-export type ThinkingEntry = ReasoningThinkingEntry | ToolThinkingEntry;
+export type ThinkingEntry = NoticeThinkingEntry | ReasoningThinkingEntry | ToolThinkingEntry;
 
 export interface ThinkingPresentation {
     readonly autoOpen: boolean;
@@ -79,6 +86,18 @@ export function describeAgentReply(
     const phase = replyPhase(attempt, active);
     const entries = activities.flatMap((activity): readonly ThinkingEntry[] => {
         const status = stepsActive && activity.status === "running" ? "streaming" : "recorded";
+        if (activity.activityType === "notice") {
+            return activity.output.length === 0
+                ? []
+                : [
+                      {
+                          id: activity.activityId,
+                          kind: "notice",
+                          severity: activity.status === "failed" ? "error" : "warning",
+                          text: activity.output,
+                      },
+                  ];
+        }
         if (activity.activityType === "reasoning" || activity.activityType === "progress") {
             return activity.output.length === 0
                 ? []
