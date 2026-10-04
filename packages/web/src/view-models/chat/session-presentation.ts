@@ -320,7 +320,21 @@ export function recordLiveTurnContent(
     }));
 }
 
-export function activeTurnSessionPresentation(turn: ActiveTurnSnapshot, sessionId: string): SessionTimelineSegment {
+export function recoverLiveTurnSessionPresentation(
+    history: OpenMobiusSession["result"]["history"],
+    turn: ActiveTurnSnapshot,
+    sessionId: string,
+): SessionTimelineSegment {
+    const presented = historySessionPresentation(history, sessionId);
+    const start = presented.messages.findIndex((message) => message.id === `${turn.commandId}:user`);
+    // Continue appending to the recovered turn. A new empty segment would hide its history on the first delta.
+    // History may contain more of a long turn than the bounded execution snapshot.
+    return start < 0
+        ? activeTurnSessionPresentation(turn, sessionId)
+        : { activities: presented.activities, messages: presented.messages.slice(start) };
+}
+
+function activeTurnSessionPresentation(turn: ActiveTurnSnapshot, sessionId: string): SessionTimelineSegment {
     const activities = new Map<string, RecordedAgentActivity>();
     const messages = turn.messages.map((message): SessionMessage => {
         if (message.role === "user") {

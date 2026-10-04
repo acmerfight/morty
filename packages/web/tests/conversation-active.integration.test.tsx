@@ -24,7 +24,9 @@ test("Given an active turn exceeds one recovery page, When the user leaves and r
     }
     await sendPrompt(app, composer, prompt);
     await app.queryElementByTestId(dataTestId.sessionStatus);
-    await app.waitForView(() => expect(responseCharacters()).toBe(expectedCharacters));
+    await app.waitForView(() =>
+        expect(responseCharacters(), document.body.textContent?.slice(0, 2000)).toBe(expectedCharacters),
+    );
     await app.waitForView(() => expect(document.body.textContent).toContain("long-output.bin"));
     await app.user.click(await app.queryElementByTestId(dataTestId.newConversation));
     const activeConversation = await app.waitForView(() => {
@@ -38,7 +40,9 @@ test("Given an active turn exceeds one recovery page, When the user leaves and r
     });
     await app.user.click(activeConversation);
     await app.queryElementByTestId(dataTestId.sessionStatus);
-    await app.waitForView(() => expect(responseCharacters()).toBe(expectedCharacters));
+    await app.waitForView(() =>
+        expect(responseCharacters(), document.body.textContent?.slice(0, 2000)).toBe(expectedCharacters),
+    );
     await app.waitForView(() => expect(document.body.textContent).toContain("long-output.bin"));
     const stop = await app.queryElementByTestId(
         dataTestId.sendMessage,
@@ -47,4 +51,58 @@ test("Given an active turn exceeds one recovery page, When the user leaves and r
     await app.user.click(stop);
     await app.waitForView(() => expect(app.optionalElementByTestId(dataTestId.sessionStatus)).toBeNull());
     expect(document.body.textContent).toContain(prompt);
+});
+
+test("Given a partially streamed reply, When Chat remounts and the daemon continues, Then the restored prefix and file survive subsequent deltas", {
+    timeout: 30_000,
+}, async () => {
+    const app = await createTestApp({ connectAgent: true });
+    const daemon = app.daemon;
+    if (daemon === null) {
+        throw new Error("Expected a connected fake daemon");
+    }
+    await app.queryElementByTestId(
+        dataTestId.botConnectionStatus,
+        (element) => element.textContent?.includes("Connected") === true,
+    );
+    const composer = await app.queryElementByTestId(dataTestId.messageComposer);
+    if (!(composer instanceof HTMLTextAreaElement)) {
+        throw new Error("Expected composer");
+    }
+    await sendPrompt(app, composer, "hold after first delta");
+    await app.queryElementByTestId(
+        dataTestId.agentResponse,
+        (element) => element.textContent?.includes("Partial reply") === true,
+    );
+    app.remount();
+    await app.queryElementByTestId(dataTestId.sessionStatus);
+    await app.waitForView(() => expect(document.body.textContent).toContain("partial.bin"));
+    daemon.replayLastText("hold after first delta");
+    daemon.continueReply("hold after first delta", {
+        outcome: "hold",
+        output: [{ kind: "text", text: " and the next streamed chunk" }],
+    });
+    await app.waitForView(() => {
+        const text = app
+            .elementsByTestId(dataTestId.agentResponse)
+            .map((element) => element.textContent)
+            .join("");
+        expect(text).toContain("Partial reply");
+        expect(text).toContain("and the next streamed chunk");
+        expect(document.body.textContent).toContain("partial.bin");
+        expect(app.optionalElementByTestId(dataTestId.sessionStatus)).not.toBeNull();
+    });
+    daemon.continueReply("hold after first delta", {
+        outcome: "complete",
+        output: [{ kind: "text", text: " and the final chunk" }],
+    });
+    await app.waitForView(() => expect(app.optionalElementByTestId(dataTestId.sessionStatus)).toBeNull());
+    const text = app
+        .elementsByTestId(dataTestId.agentResponse)
+        .map((element) => element.textContent)
+        .join("");
+    expect(text.match(/Partial reply/gu)).toHaveLength(1);
+    expect(text.match(/and the next streamed chunk/gu)).toHaveLength(1);
+    expect(text.match(/and the final chunk/gu)).toHaveLength(1);
+    expect(document.body.textContent).toContain("partial.bin");
 });
