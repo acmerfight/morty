@@ -1,6 +1,16 @@
 import type { HarnessOutput, HarnessReplyPlan } from "@moxt-ai/mobius-test-support/fake-daemon";
 
-export const mortyFiles = new Map([
+export const mortyFiles = new Map<string, { readonly content: string | Uint8Array; readonly mediaType: string }>([
+    [
+        "/workspace/generated-picture.png",
+        {
+            content: Buffer.from(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jV4kAAAAASUVORK5CYII=",
+                "base64",
+            ),
+            mediaType: "image/png",
+        },
+    ],
     [
         "/workspace/edit-tool-presentation.tsx",
         {
@@ -76,6 +86,11 @@ export function mortyReply(prompt: string, turnNumber: number, mode: "prompt" | 
                         title: "Thinking",
                     }),
                 ),
+            };
+        case "show generated picture":
+            return {
+                outcome: "complete",
+                output: [{ kind: "text", text: "![Generated picture](file:///workspace/generated-picture.png)" }],
             };
         case "show source file":
             return {
