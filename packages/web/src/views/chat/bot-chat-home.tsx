@@ -8,7 +8,7 @@ import { Dialog } from "../../components/ui/dialog.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { dataTestId } from "../../data-testid.ts";
 import type { SelectedBotPreference } from "../../services/bots/selected-bot-preference.ts";
-import type { BotChatApi } from "../../services/chat/bot-chat-api.ts";
+import type { BotChatApi, ManagedChatSession } from "../../services/chat/bot-chat-api.ts";
 import type { IdentityTransfer, WorkspaceLocation } from "../../services/identity/anonymous-identity-api.ts";
 import {
     createBotChatHomeStore,
@@ -23,6 +23,7 @@ import {
     queuedDraftMessage,
 } from "../../view-models/chat/conversation-creation-machine.ts";
 import { selectedConversationId } from "../../view-models/chat/conversation-selection-machine.ts";
+import { createConversationStatusStore } from "../../view-models/chat/conversation-status-store.ts";
 import type { SessionActivityState } from "../../view-models/chat/session-activity-machine.ts";
 import { reportApplicationError } from "../../view-models/report-error.ts";
 import { ConversationSidebar } from "./conversation-sidebar.tsx";
@@ -57,6 +58,7 @@ export function BotChatHome({
         | "nativeSession"
         | "managedSessions"
         | "managedSession"
+        | "subscribeManagedSessionStatuses"
         | "continueNativeSession"
         | "connectSession"
         | "createPairingInstruction"
@@ -110,11 +112,13 @@ export function BotChatHome({
         }),
     );
     const model = useStore(store);
+    const [statusStore] = useState(() => createConversationStatusStore(requests));
+    const [statusLifetime] = useState(() => new AbortController());
+    const sessionStatuses = useStore(statusStore, (state) => state.statuses);
     const [pairingDialogOpen, setPairingDialogOpen] = useState(false);
     const [failureDialogOpen, setFailureDialogOpen] = useState(false);
     const [disconnectedNotificationDismissed, setDisconnectedNotificationDismissed] = useState(false);
     const [attachments, setAttachments] = useState<readonly ComposerAttachment[]>([]);
-    const [sessionStatuses, setSessionStatuses] = useState<ReadonlyMap<string, SessionActivityState>>(() => new Map());
     const lifetime = useRef<AbortController | null>(null);
     const messageList = useRef<HTMLDivElement | null>(null);
     const messageContent = useRef<HTMLDivElement | null>(null);
@@ -151,6 +155,13 @@ export function BotChatHome({
             }
         };
     }, [model.revision, store]);
+    useEffect(
+        () => () => {
+            statusLifetime.abort(new Error("Conversation status lifetime ended"));
+            statusStore.getState().close();
+        },
+        [statusLifetime, statusStore],
+    );
 
     useEffect(() => {
         if (model.view.kind === "active") {
@@ -204,17 +215,25 @@ export function BotChatHome({
         model.view.kind === "connection-failed"
             ? model.view
             : null;
-    const onStatusChange = useCallback((sessionId: string, status: SessionActivityState): void => {
-        setSessionStatuses((current) => {
-            const next = new Map(current);
-            if (status.kind === "idle") {
-                next.delete(sessionId);
-            } else {
-                next.set(sessionId, status);
+    const activeBotId = active?.bot.botId;
+    const activeConversationId = selectedConversationId(model.selection);
+    useEffect(() => {
+        statusStore.getState().selectionChanged(activeConversationId);
+    }, [activeConversationId, statusStore]);
+    const onStatusChange = useCallback(
+        (sessionId: string, status: SessionActivityState): void => {
+            if (activeBotId !== undefined) {
+                statusStore.getState().statusChanged(activeBotId, sessionId, status, statusLifetime.signal);
             }
-            return next;
-        });
-    }, []);
+        },
+        [activeBotId, statusLifetime, statusStore],
+    );
+    const onDirectorySessions = useCallback(
+        (botId: string, sessions: readonly ManagedChatSession[]): void => {
+            statusStore.getState().directoryLoaded(botId, sessions, statusLifetime.signal);
+        },
+        [statusLifetime, statusStore],
+    );
     const clearComposer = () => {
         store.getState().setDraft("");
         setAttachments([]);
@@ -249,7 +268,7 @@ export function BotChatHome({
                 <ConversationSidebar
                     activeBot={active.bot}
                     sessionStatuses={sessionStatuses}
-                    activeId={selectedConversationId(model.selection)}
+                    activeId={activeConversationId}
                     directoryRevision={model.directoryRevision}
                     optimisticTitles={model.optimisticTitles}
                     bots={model.bots}
@@ -268,6 +287,7 @@ export function BotChatHome({
                         openManaged(session.result.action === "import", session.result.ready.sessionId)
                     }
                     onNewConversation={newConversation}
+                    onSessionsLoaded={onDirectorySessions}
                     endRemoteAccess={endRemoteAccess}
                     replaceCurrentUser={replaceCurrentUser}
                     key={active.bot.botId}
