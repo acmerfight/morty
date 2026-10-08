@@ -96,6 +96,54 @@ export function mortyReply(prompt: string, turnNumber: number, mode: "prompt" | 
                     },
                 ],
             };
+        case "inspect browser surfaces":
+            return {
+                outcome: "complete",
+                output: [
+                    {
+                        kind: "activity",
+                        activityType: "tool",
+                        title: "cua_repl/js",
+                        output: JSON.stringify({
+                            content: [
+                                {
+                                    type: "text",
+                                    text: "js execution timed out; kernel reset, rerun your request",
+                                },
+                            ],
+                            structuredContent: null,
+                            _meta: {
+                                browser_use: {},
+                                "codex/browserUse": true,
+                                "codex/toolSurface": {
+                                    backend: "chrome",
+                                    browserFamily: "chrome",
+                                    browserId: "1",
+                                    kind: "browserUse",
+                                },
+                            },
+                        }),
+                    },
+                    {
+                        kind: "activity",
+                        activityType: "tool",
+                        title: "cua_repl/js",
+                        output: "null",
+                    },
+                ],
+            };
+        case "run a quiet shell command":
+            return {
+                outcome: "complete",
+                output: [
+                    {
+                        kind: "activity",
+                        activityType: "tool",
+                        title: '/bin/zsh -lc "true"',
+                        output: JSON.stringify({ exitCode: 0, output: "" }),
+                    },
+                ],
+            };
         default:
             return {
                 outcome: "complete",
