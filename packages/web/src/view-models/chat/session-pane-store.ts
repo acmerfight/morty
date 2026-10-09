@@ -692,18 +692,29 @@ export function createSessionPaneModel(options: {
                                     set({ connection: { kind: "loading" } });
                                     break;
                             }
-                            const [recovery, execution] = await Promise.all([
-                                readNativeEventsV2(connected, sessionId, sessionIdentity, signal),
-                                connected.sessions.readSessionExecution(sessionId, sessionIdentity, signal),
-                            ]);
+                            const executionPromise = connected.sessions.readSessionExecution(
+                                sessionId,
+                                sessionIdentity,
+                                signal,
+                            );
+                            const recovery = await readNativeEventsV2(connected, sessionId, sessionIdentity, signal);
                             if (sessionGenerationId !== null && sessionGenerationId !== recovery.sessionGenerationId) {
                                 supersededSessionGenerationIds.add(sessionGenerationId);
                             }
                             sessionGenerationId = recovery.sessionGenerationId;
-                            const running = execution.turn;
-                            messageQueue.getState().replace(execution.queued);
                             replaceTimeline(recovery.events);
                             historyCursor = recovery.nextCursor;
+                            const native = deriveTimeline();
+                            delivery.getState().reconcile(sessionEventCommandIds(sessionEvents));
+                            signal.throwIfAborted();
+                            set({
+                                hasOlderHistory: historyCursor !== null,
+                                historyRevision: 0,
+                                messages: native.messages,
+                            });
+                            const execution = await executionPromise;
+                            const running = execution.turn;
+                            messageQueue.getState().replace(execution.queued);
                             if (running !== null) {
                                 command = running.commandId;
                                 const turnId =
@@ -720,9 +731,6 @@ export function createSessionPaneModel(options: {
                             }
                             const restoredActivity =
                                 command === "" ? ({ kind: "idle" } as const) : startSessionWork({ commandId: command });
-                            const native = deriveTimeline();
-                            const nativeMessages = native.messages;
-                            delivery.getState().reconcile(sessionEventCommandIds(sessionEvents));
                             signal.throwIfAborted();
                             const interactions: readonly LocalInteraction[] = (() => {
                                 const interaction = execution.turn?.interaction;
@@ -751,11 +759,8 @@ export function createSessionPaneModel(options: {
                                 ];
                             })();
                             set({
-                                hasOlderHistory: historyCursor !== null,
-                                historyRevision: 0,
                                 interactions,
                                 activity: restoredActivity,
-                                messages: nativeMessages,
                             });
                             switch (reconciliation.kind) {
                                 case "initial-subscription":
