@@ -301,7 +301,7 @@ async function readNativeEventsV2(
     const page = await client.sessions.querySessionNativeEventsV2(
         sessionId,
         identity,
-        { cursor: null, eventLimit: 50 },
+        { cursor: null, eventLimit: 200 },
         signal,
     );
     signal.throwIfAborted();
@@ -492,7 +492,7 @@ export function createSessionPaneModel(options: {
                             agentId: session.agentRef,
                             directoryId: session.result.ready.directoryId,
                         },
-                        { cursor: historyCursor, eventLimit: 50 },
+                        { cursor: historyCursor, eventLimit: 200 },
                         signal,
                     );
                     signal.throwIfAborted();
