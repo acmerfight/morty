@@ -95,6 +95,14 @@ export class ManagementService {
         };
     };
 
+    readonly readBotRuntimeBinding = async (userId: string, botId: string, signal: AbortSignal) => {
+        const bot = await this.#managedBots.readBot(userId, botId, signal);
+        if (bot === null) {
+            throw new ManagementError("BOT_NOT_FOUND", "Machine is unavailable.", 404);
+        }
+        return { botId: bot.botId, runtimeId: bot.configuration?.runtimeId ?? null };
+    };
+
     readonly updateBot = async (
         userId: string,
         botId: string,
