@@ -5,15 +5,18 @@ import { dataTestId } from "../src/data-testid.ts";
 import { sendPrompt } from "./infra/application-scenario.ts";
 import { createTestApp } from "./infra/test-app.tsx";
 
-test("Given a Machine, When a user renames it, Then the new name is visible in the Machine selector", {
+test("Given a selected Machine, When a user opens its settings and renames it, Then the new name is visible in the selector", {
     timeout: 30_000,
 }, async () => {
     const app = await createTestApp();
     await app.user.click(await app.queryElementByTestId(dataTestId.closeDialog));
     await app.user.click(await app.queryElementByTestId(dataTestId.botMenuTrigger));
 
-    expect(getByRole(document.body, "button", { name: "Connect another agent" })).toBeDefined();
-    await app.user.click(getByRole(document.body, "button", { name: "Rename machine" }));
+    expect(queryByRole(document.body, "button", { name: "Connect another agent" })).toBeNull();
+    expect(queryByRole(document.body, "button", { name: "Pair the machine" })).toBeNull();
+    expect(queryByRole(document.body, "button", { name: "Rename machine" })).toBeNull();
+    await app.user.keyboard("{Escape}");
+    await app.user.click(getByRole(document.body, "button", { name: "Configure My Machine" }));
 
     const name = getByRole(document.body, "textbox", { name: "Machine name" });
     expect(name).toBeInstanceOf(HTMLInputElement);
@@ -33,9 +36,14 @@ test("Given a Machine, When a user renames it, Then the new name is visible in t
 test("Given an existing Machine, When the user opens another agent instruction and closes or reloads Chat without pairing, Then no additional Machine is created", {
     timeout: 30_000,
 }, async () => {
-    const app = await createTestApp();
-    await app.queryElementByTestId(dataTestId.pairingInstruction);
-    await app.user.click(await app.queryElementByTestId(dataTestId.closeDialog));
+    const app = await createTestApp({ connectAgent: true });
+    await app.queryElementByTestId(
+        dataTestId.botConnectionStatus,
+        (element) => element.textContent?.includes("Connected") === true,
+    );
+    if (app.optionalElementByTestId(dataTestId.closeDialog)) {
+        await app.user.click(await app.queryElementByTestId(dataTestId.closeDialog));
+    }
     for (const leave of ["close", "reload"] as const) {
         await app.user.click(await app.queryElementByTestId(dataTestId.botMenuTrigger));
         await app.user.click(getByRole(document.body, "button", { name: "Connect another agent" }));
@@ -44,6 +52,9 @@ test("Given an existing Machine, When the user opens another agent instruction a
         expect(queryByRole(document.body, "textbox", { name: "Connection name" })).toBeNull();
         if (leave === "reload") {
             app.remount();
+            await app.queryElementByTestId(dataTestId.botMenuTrigger);
+            await app.user.click(await app.queryElementByTestId(dataTestId.botMenuTrigger));
+            await app.user.click(getByRole(document.body, "button", { name: "Connect another agent" }));
             await app.queryElementByTestId(dataTestId.pairingInstruction);
         }
         await app.user.click(await app.queryElementByTestId(dataTestId.closeDialog));
@@ -58,16 +69,21 @@ test("Given an existing Machine, When the user opens another agent instruction a
 test("Given an additional-agent instruction, When the agent redeems it and connects, Then Chat selects the new Machine and retains the existing one", {
     timeout: 30_000,
 }, async () => {
-    const app = await createTestApp();
-    await app.queryElementByTestId(dataTestId.pairingInstruction);
-    await app.user.click(await app.queryElementByTestId(dataTestId.closeDialog));
+    const app = await createTestApp({ connectAgent: true });
+    await app.queryElementByTestId(
+        dataTestId.botConnectionStatus,
+        (element) => element.textContent?.includes("Connected") === true,
+    );
+    if (app.optionalElementByTestId(dataTestId.closeDialog)) {
+        await app.user.click(await app.queryElementByTestId(dataTestId.closeDialog));
+    }
     await app.user.click(await app.queryElementByTestId(dataTestId.botMenuTrigger));
     await app.user.click(getByRole(document.body, "button", { name: "Connect another agent" }));
     const instruction = await app.queryElementByTestId(dataTestId.pairingInstruction);
     if (!(instruction instanceof HTMLInputElement)) {
         throw new Error("Expected the pairing instruction");
     }
-    await app.connectAgent({ id: "claude", label: "Codex" }, undefined, instruction.value);
+    await app.connectAgent({ id: "codex", label: "Codex" }, undefined, instruction.value);
     await app.queryElementByTestId(
         dataTestId.botMenuTrigger,
         (element) => element.textContent?.includes("My Machine 2") === true,
