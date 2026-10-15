@@ -250,32 +250,20 @@ export class IdentityStorage {
                   }
                 : { kind: "unauthenticated" };
         }
-        const results = await database.batch([
-            database
-                .update(continueLink)
-                .set({ revokedAt: now })
-                .where(
-                    and(
-                        eq(continueLink.id, credential.transferId),
-                        eq(continueLink.userId, credential.userId),
-                        isNull(continueLink.revokedAt),
-                    ),
+        const revoked = await database
+            .update(anonymousCredential)
+            .set({ status: "revoked", revokedAt: now })
+            .where(
+                and(
+                    eq(anonymousCredential.remoteTransferId, credential.transferId),
+                    eq(anonymousCredential.status, "active"),
                 ),
-            database
-                .update(anonymousCredential)
-                .set({ status: "revoked", revokedAt: now })
-                .where(
-                    and(
-                        eq(anonymousCredential.remoteTransferId, credential.transferId),
-                        eq(anonymousCredential.status, "active"),
-                    ),
-                ),
-        ]);
+            )
+            .run();
         signal.throwIfAborted();
-        if (results[0]?.meta.changes !== 1) {
-            return { kind: "unauthenticated" };
-        }
-        return { kind: "ended-transfer", transferId: credential.transferId, userId: credential.userId };
+        return revoked.meta.changes > 0
+            ? { kind: "ended-transfer", transferId: credential.transferId, userId: credential.userId }
+            : { kind: "unauthenticated" };
     };
 
     readonly clerkBinding = async (clerkUserId: string, signal: AbortSignal): Promise<string | null> => {
