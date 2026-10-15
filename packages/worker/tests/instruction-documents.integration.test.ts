@@ -68,7 +68,8 @@ test("Given setup and pairing documents, When users fetch them from configured a
         expect(document).toContain("Chat origin: https://chat.example");
         expect(document).toContain("https://chat.example/setup.mjs");
         expect(document).not.toContain("/setup-help/");
-        expect(document).toContain("DOCUMENT_DIR");
+        expect(document).toContain("`~/Documents`");
+        expect(document).not.toContain("DOCUMENT_DIR");
         expect(document).not.toContain("```powershell");
         expect(document).not.toContain("```sh");
         expect(document.length).toBeLessThan(4000);
