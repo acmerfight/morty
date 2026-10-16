@@ -17,6 +17,7 @@ import {
     sessionLastSentMessageEntry,
 } from "../../services/indexed-db/central-indexed-db.ts";
 import { centralLocalStorage, sessionDraftEntry } from "../../services/local-storage/central-local-storage.ts";
+import { formatError } from "../format-error.ts";
 import type { ComposerAttachment } from "./composer-attachment.ts";
 import type { QueuedDraftMessage } from "./conversation-creation-machine.ts";
 import type { OpenMobiusSession } from "./open-session.ts";
@@ -565,7 +566,7 @@ export function createSessionPaneModel(options: {
                     set({
                         operation: {
                             kind: "failed",
-                            message: cause instanceof Error ? cause.message : "Older messages could not be loaded.",
+                            message: formatError(cause, "Older messages could not be loaded."),
                         },
                     });
                     throw cause;
@@ -872,7 +873,7 @@ export function createSessionPaneModel(options: {
                     client?.close();
                     client = null;
                     if (!signal.aborted) {
-                        const message = cause instanceof Error ? cause.message : "The Session could not be opened.";
+                        const message = formatError(cause, "The Session could not be opened.");
                         set({
                             connection: { kind: "failed", message },
                             activity: transitionSessionActivity(get().activity, {
@@ -973,13 +974,11 @@ export function createSessionPaneModel(options: {
                         activity: transitionSessionActivity(current.activity, {
                             commandId,
                             kind: "work-failed",
-                            message:
-                                cause instanceof Error ? cause.message : "The agent could not complete the message.",
+                            message: formatError(cause, "The agent could not complete the message."),
                         }),
                         operation: {
                             kind: "failed",
-                            message:
-                                cause instanceof Error ? cause.message : "The agent could not complete the message.",
+                            message: formatError(cause, "The agent could not complete the message."),
                         },
                     }));
                 }
@@ -1104,7 +1103,7 @@ export function createSessionPaneModel(options: {
                     set({
                         operation: {
                             kind: "failed",
-                            message: cause instanceof Error ? cause.message : "The selection could not be applied.",
+                            message: formatError(cause, "The selection could not be applied."),
                         },
                     });
                 }
@@ -1124,7 +1123,7 @@ export function createSessionPaneModel(options: {
                     set({
                         operation: {
                             kind: "failed",
-                            message: cause instanceof Error ? cause.message : "The settings could not be reloaded.",
+                            message: formatError(cause, "The settings could not be reloaded."),
                         },
                     });
                 }
