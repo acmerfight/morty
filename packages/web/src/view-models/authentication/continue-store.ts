@@ -1,10 +1,8 @@
 import { isIdentifier } from "@moxt-ai/mobius-protocol";
 import { createStore } from "zustand/vanilla";
-import { createSelectedBotPreference } from "@/services/bots/selected-bot-preference";
 import { BotChatApi } from "@/services/chat/bot-chat-api";
 import { recordBrowserError, registerDaemonDiagnostics } from "@/services/diagnostics/browser-diagnostics";
-import { AnonymousIdentityApi, hasStoredAnonymousCredential } from "@/services/identity/anonymous-identity-api";
-import { ManagementApi } from "@/services/management/management-api";
+import { AnonymousIdentityApi } from "@/services/identity/anonymous-identity-api";
 import { formatError } from "@/view-models/format-error";
 
 export type NativeSessionImportAvailability =
@@ -21,23 +19,19 @@ type ContinueState =
           readonly kind: "session-confirm";
           readonly code: string;
           readonly handoff: SessionHandoff;
-          readonly replacesIdentity: boolean;
       }
     | {
           readonly kind: "session-redeeming";
           readonly code: string;
           readonly handoff: SessionHandoff;
           readonly choice: NativeSessionChoice;
-          readonly replacesIdentity: boolean;
       }
     | {
           readonly kind: "session-failed";
           readonly code: string;
           readonly handoff: SessionHandoff;
           readonly message: string;
-          readonly replacesIdentity: boolean;
       }
-    | { readonly kind: "identity-confirm"; readonly code: string }
     | { readonly kind: "identity-redeeming"; readonly code: string }
     | { readonly kind: "failed"; readonly message: string }
     | { readonly kind: "invalid" };
@@ -45,7 +39,6 @@ type ContinueState =
 export interface ContinueStore {
     readonly state: ContinueState;
     readonly continueSession: (choice: NativeSessionChoice) => void;
-    readonly continueIdentity: () => void;
     readonly redeem: (signal: AbortSignal) => Promise<void>;
     readonly dispose: () => void;
 }
@@ -63,7 +56,6 @@ function initialState(): ContinueState {
     ) {
         return { kind: "invalid" };
     }
-    const replacesIdentity = hasStoredAnonymousCredential();
     if (harness !== null && sessionId !== null) {
         const importAvailability: NativeSessionImportAvailability =
             harness === "codex"
@@ -76,10 +68,9 @@ function initialState(): ContinueState {
             code,
             handoff: { harness, importAvailability, sessionId },
             kind: "session-confirm",
-            replacesIdentity,
         };
     }
-    return replacesIdentity ? { code, kind: "identity-confirm" } : { code, kind: "identity-redeeming" };
+    return { code, kind: "identity-redeeming" };
 }
 
 export function continueCode(state: ContinueState): string | null {
@@ -113,15 +104,8 @@ export const createContinueStore = (fetchRequest: (request: Request) => Promise<
                         code: state.code,
                         handoff: state.handoff,
                         kind: "session-redeeming",
-                        replacesIdentity: state.replacesIdentity,
                     },
                 });
-            }
-        },
-        continueIdentity: () => {
-            const state = get().state;
-            if (state.kind === "identity-confirm") {
-                set({ state: { code: state.code, kind: "identity-redeeming" } });
             }
         },
         redeem: async (signal) => {
@@ -147,19 +131,6 @@ export const createContinueStore = (fetchRequest: (request: Request) => Promise<
                     window.location.replace("/");
                     return;
                 }
-                const management = new ManagementApi({
-                    fetchRequest,
-                    origin: window.location.origin,
-                    projectId: identity.projectId,
-                    getToken: async () => identity.token,
-                });
-                operation = "bots";
-                const bots = await management.listBots(signal);
-                const preferredBot = createSelectedBotPreference(identity.projectId).read();
-                const bot = bots.find((candidate) => candidate.botId === preferredBot) ?? bots[0];
-                if (bot === undefined) {
-                    throw new Error("Your Machine is unavailable.");
-                }
                 const chat = new BotChatApi({
                     fetchRequest,
                     origin: window.location.origin,
@@ -173,14 +144,14 @@ export const createContinueStore = (fetchRequest: (request: Request) => Promise<
                     },
                 });
                 releaseDiagnostics = registerDaemonDiagnostics({
-                    botId: bot.botId,
+                    botId: identity.botId,
                     sessionId: null,
                     nativeSessionId: state.handoff.sessionId,
-                    read: (parent) => chat.daemonDiagnostics(bot.botId, parent),
+                    read: (parent) => chat.daemonDiagnostics(identity.botId, parent),
                 });
                 operation = "continue-native-session";
                 const session = await chat.continueNativeSession(
-                    bot.botId,
+                    identity.botId,
                     state.handoff.harness,
                     state.handoff.sessionId,
                     choice,
@@ -202,7 +173,6 @@ export const createContinueStore = (fetchRequest: (request: Request) => Promise<
                                       handoff: state.handoff,
                                       kind: "session-failed",
                                       message,
-                                      replacesIdentity: state.replacesIdentity,
                                   }
                                 : { kind: "failed", message },
                     });
