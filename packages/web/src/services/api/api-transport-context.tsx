@@ -22,9 +22,13 @@ export function ApiTransportProvider({
 }
 
 export function useApiTransport(): ApiTransport {
-    const transport = useContext(ApiTransportContext);
+    const transport = useOptionalApiTransport();
     if (transport === null) {
         throw new Error("The Chat API transport is unavailable.");
     }
     return transport;
+}
+
+export function useOptionalApiTransport(): ApiTransport | null {
+    return useContext(ApiTransportContext);
 }

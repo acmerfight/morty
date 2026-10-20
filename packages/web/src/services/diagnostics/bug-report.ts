@@ -1,6 +1,7 @@
 import type { RuntimeDiagnosticsResult } from "@moxt-ai/mobius-sdk/protocol";
-import { captureFeedback, getClient, lastEventId } from "@sentry/react";
-import { browserDiagnosticsSnapshot, currentDaemonDiagnostics } from "./browser-diagnostics.ts";
+import { captureFeedback, getClient } from "@sentry/react";
+import type { browserDiagnosticsSnapshot } from "./browser-diagnostics.ts";
+import type { NetworkDiagnostics } from "./network-diagnostics.ts";
 
 export interface BugReport {
     readonly id: string;
@@ -14,6 +15,7 @@ export interface BugReport {
     readonly sessionId: string | null;
     readonly nativeSessionId: string | null;
     readonly web: ReturnType<typeof browserDiagnosticsSnapshot>;
+    readonly network: NetworkDiagnostics;
     readonly daemon:
         | { readonly kind: "available"; readonly diagnostics: RuntimeDiagnosticsResult }
         | { readonly kind: "unavailable"; readonly code: string };
@@ -94,45 +96,6 @@ function readImage(file: File, signal: AbortSignal): Promise<Uint8Array<ArrayBuf
             );
         }
     });
-}
-
-export async function collectBugReport(description: string, signal: AbortSignal): Promise<BugReport> {
-    signal.throwIfAborted();
-    const source = currentDaemonDiagnostics();
-    const web = browserDiagnosticsSnapshot();
-    let daemon: BugReport["daemon"] = { kind: "unavailable", code: "NO_ACTIVE_RUNTIME" };
-    if (source !== null) {
-        const deadline = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
-        try {
-            daemon = { kind: "available", diagnostics: await source.read(deadline) };
-        } catch (cause) {
-            signal.throwIfAborted();
-            const code: unknown = cause instanceof Error ? Reflect.get(cause, "code") : undefined;
-            daemon = {
-                kind: "unavailable",
-                code: deadline.aborted
-                    ? "DIAGNOSTIC_TIMEOUT"
-                    : typeof code === "string" && /^[A-Z_a-z0-9]{1,64}$/u.test(code)
-                      ? code
-                      : "DIAGNOSTIC_UNAVAILABLE",
-            };
-        }
-    }
-    signal.throwIfAborted();
-    return {
-        id: crypto.randomUUID().replaceAll("-", ""),
-        createdAt: new Date().toISOString(),
-        description: description.trim().slice(0, 2000),
-        page: window.location.pathname.slice(0, 512),
-        relatedEventId: lastEventId() ?? null,
-        browser: navigator.userAgent.slice(0, 512),
-        release: (getClient()?.getOptions().release ?? "development").slice(0, 128),
-        botId: source?.botId ?? null,
-        sessionId: source?.sessionId ?? null,
-        nativeSessionId: source?.nativeSessionId ?? null,
-        web,
-        daemon,
-    };
 }
 
 export const sentryBugReportSink: BugReportSink = {

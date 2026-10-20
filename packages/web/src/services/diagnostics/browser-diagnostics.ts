@@ -1,4 +1,5 @@
 import type { RuntimeDiagnosticsResult } from "@moxt-ai/mobius-sdk/protocol";
+import type { ServerNetworkOperations } from "./network-diagnostics.ts";
 
 export interface BrowserDiagnostic {
     readonly at: string;
@@ -7,6 +8,7 @@ export interface BrowserDiagnostic {
     readonly outcome: string;
     readonly requestId: string;
     readonly elapsedMs: number;
+    readonly closeCode?: number;
 }
 const entries: BrowserDiagnostic[] = [];
 let discarded = 0;
@@ -28,23 +30,12 @@ interface BrowserDiagnosticsSnapshot {
 }
 export const browserDiagnosticsSnapshot = (): BrowserDiagnosticsSnapshot => ({ entries: [...entries], discarded });
 
-interface DaemonDiagnosticsSource {
+export interface DaemonDiagnosticsSource extends ServerNetworkOperations {
     readonly botId: string;
     readonly sessionId: string | null;
     readonly nativeSessionId: string | null;
     readonly read: (signal: AbortSignal) => Promise<RuntimeDiagnosticsResult>;
 }
-let source: DaemonDiagnosticsSource | null = null;
-export function registerDaemonDiagnostics(next: DaemonDiagnosticsSource): () => void {
-    source = next;
-    return () => {
-        if (source === next) {
-            source = null;
-        }
-    };
-}
-export const currentDaemonDiagnostics = (): DaemonDiagnosticsSource | null => source;
-
 // Never store arbitrary error messages: they may contain prompts, paths or credentials.
 export function recordBrowserError(operation: string, cause?: unknown): void {
     const code: unknown = cause instanceof Error ? Reflect.get(cause, "code") : undefined;

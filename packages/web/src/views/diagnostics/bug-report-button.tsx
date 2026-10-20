@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { Button } from "../../components/ui/cloud-button.tsx";
 import { Dialog } from "../../components/ui/dialog.tsx";
+import { useOptionalApiTransport } from "../../services/api/api-transport-context.tsx";
+import type { DaemonDiagnosticsSource } from "../../services/diagnostics/browser-diagnostics.ts";
 import { sentryBugReportSink } from "../../services/diagnostics/bug-report.ts";
 import { type BugReportImage, bugReportImageAccept, createBugReportStore } from "../../view-models/bug-report-store.ts";
 
@@ -13,7 +15,13 @@ const appearances = {
     labelled: "min-h-10 shrink-0 text-xs",
 };
 
-export function BugReportButton({ appearance = "labelled" }: { readonly appearance?: keyof typeof appearances }) {
+export function BugReportButton({
+    appearance = "labelled",
+    daemonSource = null,
+}: {
+    readonly appearance?: keyof typeof appearances;
+    readonly daemonSource?: DaemonDiagnosticsSource | null;
+}) {
     const [open, setOpen] = useState(false);
     const trigger = (
         <Button
@@ -46,7 +54,7 @@ export function BugReportButton({ appearance = "labelled" }: { readonly appearan
             ) : (
                 trigger
             )}
-            {open && <BugReportDialog onClose={() => setOpen(false)} />}
+            {open && <BugReportDialog daemonSource={daemonSource} onClose={() => setOpen(false)} />}
         </>
     );
 }
@@ -85,15 +93,22 @@ function ReportImage({
     );
 }
 
-function BugReportDialog({ onClose }: { readonly onClose: () => void }) {
-    const [store] = useState(() => createBugReportStore(sentryBugReportSink));
+function BugReportDialog({
+    onClose,
+    daemonSource,
+}: {
+    readonly onClose: () => void;
+    readonly daemonSource: DaemonDiagnosticsSource | null;
+}) {
+    const transport = useOptionalApiTransport();
+    const [store] = useState(() => createBugReportStore(sentryBugReportSink, transport, daemonSource));
     const { state, description, images, addImages, removeImage, describe, send, close } = useStore(store);
     const fileInput = useRef<HTMLInputElement>(null);
     useEffect(() => close, [close]);
     return (
         <Dialog
             title="Report a bug"
-            description="Send a description, optional images and recent technical diagnostics to the Morty team. Session text, other files and credentials are not collected automatically."
+            description="Send a description, optional images and recent technical and network diagnostics to the Morty team. Session text, other files and credentials are not collected automatically."
             onClose={onClose}
         >
             {state.kind === "sent" ? (
@@ -171,8 +186,8 @@ function BugReportDialog({ onClose }: { readonly onClose: () => void }) {
                         </p>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                        Daemon diagnostics may take up to 10 seconds. You can still send a report when your Runtime is
-                        offline.
+                        Network and daemon diagnostics are collected automatically and may take up to 10 seconds. You
+                        can still send a report when your Runtime is offline.
                     </p>
                     {state.kind === "failed" && <p role="alert">{state.message}</p>}
                     {state.kind === "sending" && <p role="status">Collecting diagnostics and sending…</p>}
