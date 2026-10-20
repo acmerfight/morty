@@ -1,26 +1,33 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useApiTransport } from "../../services/api/api-transport-context.tsx";
-import { BotChatApi } from "../../services/chat/bot-chat-api.ts";
 import { AnonymousIdentityApi } from "../../services/identity/anonymous-identity-api.ts";
+import { useMortyApplication } from "../application/application-context.tsx";
 import { useActiveIdentity } from "../authentication/identity-context.tsx";
 import { BotChatHome } from "../chat/bot-chat-home.tsx";
 
 export function MobiusManagement() {
     const transport = useApiTransport();
+    const application = useMortyApplication();
     const identity = useActiveIdentity();
-    const requests = useMemo(
+    // The workspace and its chat API are owned by the application factory.
+    // Memoizing on the identity object keeps acquisition pure across renders:
+    // the factory's dispose-and-recreate only runs when the active identity
+    // actually changes, never as a side effect of a re-render.
+    // Constraint: acquisition still happens during render. The application
+    // mounts without StrictMode and the active identity object is stable for
+    // as long as the anonymous session stays active, so a concurrent render
+    // cannot be discarded between an identity change and its commit; if that
+    // ever changes, move acquisition to an event/owner scope.
+    const workspace = useMemo(
         () =>
-            new BotChatApi({
-                origin: window.location.origin,
-                projectId: identity.projectId,
+            application.chatWorkspace({
+                botId: identity.botId,
                 getToken: identity.getToken,
-                fetchRequest: transport.fetch,
-                subscribe: transport.subscribe,
-                waitForChange: transport.waitForChange,
+                projectId: identity.projectId,
             }),
-        [identity, transport],
+        [application, identity],
     );
-    useEffect(() => () => requests.close(), [requests]);
+    const requests = workspace.requests;
     const createTransfer = useCallback(
         async (signal: AbortSignal) => {
             const api = new AnonymousIdentityApi({
@@ -62,11 +69,11 @@ export function MobiusManagement() {
     );
     return (
         <BotChatHome
+            workspace={workspace}
             requests={requests}
             createTransfer={createTransfer}
             currentAccessToken={currentAccessToken}
             endRemoteAccess={endRemoteAccess}
-            botId={identity.botId}
             projectId={identity.projectId}
         />
     );

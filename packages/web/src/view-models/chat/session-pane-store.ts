@@ -28,7 +28,7 @@ import {
     transitionSessionActivity,
     workingCommandId,
 } from "./session-activity-machine.ts";
-import { createSessionDeliveryStore, type SessionDeliveryStore } from "./session-delivery-store.ts";
+import { createSessionDeliveryStore, type Journal, type SessionDeliveryStore } from "./session-delivery-store.ts";
 import { createSessionMessageQueueStore, type SessionMessageQueueStore } from "./session-message-queue-store.ts";
 import type {
     ElicitationInteraction,
@@ -251,6 +251,22 @@ export function sessionPanePresentation(
     const deliveryUnknownCommandId =
         delivery.state.kind === "delivery-unknown" ? delivery.state.journal.commandId : null;
     const deliveryUnknownUserMessageId = deliveryUnknownCommandId === null ? null : deliveryUnknownCommandId;
+    // A recovered journal was never accepted by the service, so the projection
+    // has no user message for it. Expose the submission itself so the view can
+    // render an independent recovery card with retry and remove controls. Once
+    // the service confirms the turn, history supplies the message and the card
+    // disappears.
+    const unconfirmed = delivery.state.kind === "delivery-unknown" ? delivery.state.journal : null;
+    const unconfirmedDelivery =
+        unconfirmed === null ||
+        model.messages.some((message) => message.role === "user" && message.commandId === unconfirmed.commandId)
+            ? null
+            : {
+                  commandId: unconfirmed.commandId,
+                  displayPrompt: unconfirmed.displayPrompt,
+                  images: unconfirmed.request.images,
+                  resources: unconfirmed.request.resources,
+              };
     return {
         activeMessageId,
         activeCommandId,
@@ -289,6 +305,7 @@ export function sessionPanePresentation(
         submitDisabled:
             (tasks.operation.kind === "running" ? queue.operation.kind !== "idle" : busy) ||
             (model.draft.trim() === "" && model.attachments.length === 0),
+        unconfirmedDelivery,
     } as const;
 }
 
@@ -352,6 +369,18 @@ export function createSessionPaneModel(options: {
     readonly botId: string;
     readonly requests: Pick<BotChatApi, "connectSession">;
     readonly initialMessage?: QueuedDraftMessage | undefined;
+    /**
+     * A previous pane's unconfirmed first-message submission. Adopted as the
+     * delivery journal so the user can retry or discard it, and a remount never
+     * resubmits it automatically.
+     */
+    readonly unconfirmedMessage?: Journal | undefined;
+    /** Invoked once after the queued first message has been sent. */
+    readonly onInitialMessageDelivered?: (() => void) | undefined;
+    /** Invoked when the queued first message can no longer be delivered by this pane. */
+    readonly onInitialMessageRecoveryCleared?: ((commandId: string) => void) | undefined;
+    /** Invoked when the submission of the queued first message was not confirmed. */
+    readonly onInitialMessageUnconfirmed?: ((journal: Journal) => void) | undefined;
     readonly onTitleChange: (sessionId: string, title: string) => void;
 }) {
     const { session, botId, requests } = options;
@@ -374,6 +403,11 @@ export function createSessionPaneModel(options: {
     let loadingOlderHistory = false;
     let command = openedActiveTurn.kind === "idle" ? "" : openedActiveTurn.commandId;
     let initialCommandId = options.initialMessage?.commandId ?? null;
+    // The queued first message stays the pane's recovery responsibility until
+    // the service accepts it or the user discards it, not just until the send
+    // starts.
+    const queuedInitialCommandId = options.initialMessage?.commandId ?? options.unconfirmedMessage?.commandId ?? null;
+    const isQueuedInitialMessage = (commandId: string): boolean => commandId === queuedInitialCommandId;
     let sessionConfigurations = session.result.ready.configOptions.map((option) => ({
         booleanValue: option.type === "boolean" ? option.booleanValue : false,
         configId: option.id,
@@ -414,6 +448,7 @@ export function createSessionPaneModel(options: {
                 signal,
             );
         },
+        initialUnknown: options.unconfirmedMessage,
     });
     const lastSentMessageEntry = sessionLastSentMessageEntry(sessionId);
     let lastSentMessage: SessionLastSentMessage | null = null;
@@ -909,9 +944,17 @@ export function createSessionPaneModel(options: {
                     signal.throwIfAborted();
                     set({ connection: { kind: "ready", client: connected } });
                     if (initialCommandId !== null) {
+                        // Send reports delivery itself, so an uncertain or
+                        // rejected submission leaves the queued message and its
+                        // idempotent command id in the home store for a remount
+                        // to recover.
                         await get().send(signal);
                         signal.throwIfAborted();
                     }
+                    // A detach between submit and the delivery report can still
+                    // re-send the queued message on re-attach. That is safe:
+                    // the command id is the turn submit's idempotency key, so
+                    // the service deduplicates the repeated submission.
                     await subscription.completed;
                     signal.throwIfAborted();
                     throw new Error("Session updates disconnected. Reopen the Session to continue.");
@@ -1036,35 +1079,45 @@ export function createSessionPaneModel(options: {
                 });
                 try {
                     activeTurn.submissionStarted(commandId);
-                    const accepted = await delivery.getState().submit(
-                        commandId,
-                        displayPrompt,
-                        {
-                            ...request,
-                            content: prompt,
-                            images,
-                            resources: current.attachments.flatMap((attachment) =>
-                                attachment.kind === "resource" ? [attachment.resource] : [],
-                            ),
-                        },
-                        signal,
-                    );
+                    const submission = {
+                        ...request,
+                        content: prompt,
+                        images,
+                        resources: current.attachments.flatMap((attachment) =>
+                            attachment.kind === "resource" ? [attachment.resource] : [],
+                        ),
+                    };
+                    const accepted = await delivery.getState().submit(commandId, displayPrompt, submission, signal);
                     signal.throwIfAborted();
+                    // Report delivery as soon as the service accepts the turn,
+                    // independently of `command`: a live event may clear it
+                    // while the submission is in flight. An uncertain
+                    // (delivery-unknown) or rejected submission marks the
+                    // queued first message as unconfirmed, which keeps its
+                    // content and command id for an explicit retry but never
+                    // auto-sends it from a remount.
+                    if (accepted !== null) {
+                        if (isQueuedInitialMessage(commandId)) {
+                            options.onInitialMessageDelivered?.();
+                        }
+                    } else if (isQueuedInitialMessage(commandId)) {
+                        options.onInitialMessageUnconfirmed?.({ commandId, displayPrompt, request: submission });
+                    }
                     if (accepted !== null && command === commandId) {
                         tasks.getState().start(commandId, accepted.turnId);
                         activeTurn.submissionAccepted(commandId, accepted.turnId);
                         set({ operation: { kind: "idle" } });
-                    } else {
-                        activeTurn.turnCleared(commandId);
-                        command = "";
-                        const idle = { kind: "idle" } as const;
-                        const restored = deriveTimeline();
-                        set({
-                            activity: idle,
-                            messages: restored.messages,
-                            operation: { kind: "idle" },
-                        });
+                        return;
                     }
+                    activeTurn.turnCleared(commandId);
+                    command = "";
+                    const idle = { kind: "idle" } as const;
+                    const restored = deriveTimeline();
+                    set({
+                        activity: idle,
+                        messages: restored.messages,
+                        operation: { kind: "idle" },
+                    });
                 } catch (cause) {
                     signal.throwIfAborted();
                     set((current) => ({
@@ -1089,6 +1142,12 @@ export function createSessionPaneModel(options: {
                     activeTurn.turnCleared(commandId);
                     command = "";
                 }
+                // Mirrors the delivery report: dropping this pane's retry path
+                // must also drop the home store's recovery copy, or a remount
+                // would submit the message the user just discarded.
+                if (isQueuedInitialMessage(commandId)) {
+                    options.onInitialMessageRecoveryCleared?.(commandId);
+                }
                 const activity = transitionSessionActivity(get().activity, { commandId, kind: "work-completed" });
                 const restored = deriveTimeline();
                 set({ activity, messages: restored.messages });
@@ -1109,6 +1168,12 @@ export function createSessionPaneModel(options: {
                 const accepted = await delivery.getState().retry(signal);
                 signal.throwIfAborted();
                 if (accepted !== null) {
+                    // A successful retry also delivers the queued first
+                    // message, so the home store must stop treating it as
+                    // pending recovery.
+                    if (isQueuedInitialMessage(pending.commandId)) {
+                        options.onInitialMessageDelivered?.();
+                    }
                     tasks.getState().start(pending.commandId, accepted.turnId);
                     activeTurn.submissionAccepted(pending.commandId, accepted.turnId);
                 } else {

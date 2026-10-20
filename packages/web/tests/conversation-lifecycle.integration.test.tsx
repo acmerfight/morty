@@ -6,6 +6,117 @@ import { dataTestId } from "../src/data-testid.ts";
 import { sendPrompt } from "./infra/application-scenario.ts";
 import { createTestApp } from "./infra/test-app.tsx";
 
+test("Given a conversation created from a queued first message, When the Chat application remounts, Then the prompt is delivered exactly once", {
+    timeout: 30_000,
+}, async () => {
+    const app = await createTestApp({ connectAgent: true });
+    await app.queryElementByTestId(
+        dataTestId.botConnectionStatus,
+        (element) => element.textContent?.includes("Connected") === true,
+    );
+    const composer = await app.queryElementByTestId(dataTestId.messageComposer);
+    if (!(composer instanceof HTMLTextAreaElement)) {
+        throw new Error("Expected the message composer");
+    }
+    await sendPrompt(app, composer, "Queue this first message");
+    // The conversation opens from the queued message; wait for the reply so
+    // the turn completes before the remount releases the selection.
+    await app.waitForView(() => {
+        expect(
+            app
+                .elementsByTestId(dataTestId.userMessage)
+                .some((element) => element.textContent === "Queue this first message"),
+        ).toBe(true);
+        expect(
+            app
+                .elementsByTestId(dataTestId.agentResponse)
+                .some((element) => element.textContent?.includes("Codex turn 1: Queue this first message")),
+        ).toBe(true);
+    });
+    app.remount();
+    await app.waitForView(() => {
+        const delivered = app
+            .elementsByTestId(dataTestId.userMessage)
+            .filter((element) => element.textContent === "Queue this first message");
+        expect(delivered).toHaveLength(1);
+    });
+});
+
+test("Given an open conversation, When the chat view detaches and re-attaches, Then the pane re-reads the session and restores its history", {
+    timeout: 30_000,
+}, async () => {
+    const prompt = "Restore this conversation after re-attach";
+    const app = await createTestApp({ connectAgent: true });
+    await app.queryElementByTestId(
+        dataTestId.botConnectionStatus,
+        (element) => element.textContent?.includes("Connected") === true,
+    );
+    const composer = await app.queryElementByTestId(dataTestId.messageComposer);
+    if (!(composer instanceof HTMLTextAreaElement)) {
+        throw new Error("Expected the message composer");
+    }
+    await sendPrompt(app, composer, prompt);
+    await app.waitForView(() =>
+        expect(
+            app
+                .elementsByTestId(dataTestId.agentResponse)
+                .some((element) => element.textContent?.includes(`Codex turn 1: ${prompt}`)),
+        ).toBe(true),
+    );
+    app.remount();
+    // The re-attached view must show the persisted conversation again from
+    // the re-read session, not an empty or stale pane.
+    await app.waitForView(() =>
+        expect(app.elementsByTestId(dataTestId.userMessage).some((element) => element.textContent === prompt)).toBe(
+            true,
+        ),
+    );
+    await app.waitForView(() =>
+        expect(
+            app
+                .elementsByTestId(dataTestId.agentResponse)
+                .some((element) => element.textContent?.includes(`Codex turn 1: ${prompt}`)),
+        ).toBe(true),
+    );
+});
+
+test("Given a remounted conversation whose re-read is in flight, When the user re-selects it from the directory, Then the superseded read cannot fail the new attempt", {
+    timeout: 30_000,
+}, async () => {
+    const prompt = "Re-select during re-read";
+    const app = await createTestApp({ connectAgent: true });
+    await app.queryElementByTestId(
+        dataTestId.botConnectionStatus,
+        (element) => element.textContent?.includes("Connected") === true,
+    );
+    const composer = await app.queryElementByTestId(dataTestId.messageComposer);
+    if (!(composer instanceof HTMLTextAreaElement)) {
+        throw new Error("Expected the message composer");
+    }
+    await sendPrompt(app, composer, prompt);
+    await app.waitForView(() =>
+        expect(
+            app
+                .elementsByTestId(dataTestId.agentResponse)
+                .some((element) => element.textContent?.includes(`Codex turn 1: ${prompt}`)),
+        ).toBe(true),
+    );
+    // The remount starts a re-read of the released selection; selecting the
+    // same conversation from the directory again immediately supersedes that
+    // read with a fresh home load. The superseded read's cancellation must
+    // not surface as a failure for the newer attempt.
+    app.remount();
+    const conversation = await app.queryElementByTestId(dataTestId.managedConversation);
+    await app.user.click(conversation);
+    await app.waitForView(() => {
+        expect(queryByRole(document.body, "alert")).toBeNull();
+        expect(app.elementsByTestId(dataTestId.userMessage).some((element) => element.textContent === prompt)).toBe(
+            true,
+        );
+    });
+    await app.waitForView(() => expect(app.optionalElementByTestId(dataTestId.sessionLoadFailure)).toBeNull());
+});
+
 test("Given conversations updated across recent dates, When the directory loads, Then conversations are grouped by latest activity", {
     timeout: 60_000,
 }, async () => {
