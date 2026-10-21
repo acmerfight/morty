@@ -65,7 +65,9 @@ test("Given a new browser, When Morty loads, Then Morty opens without presenting
     const app = await createTestApp({ page: { kind: "bootstrap" } });
 
     expect(
-        await app.waitForView(() => getByRole(document.body, "heading", { name: "Connect your local agent" })),
+        await app.waitForView(() =>
+            getByRole(document.body, "heading", { name: "Continue your coding session from your phone." }),
+        ),
     ).toBeInstanceOf(HTMLElement);
     expect(document.body.textContent).not.toContain("Local agents");
     expect(document.body.textContent?.toLowerCase()).not.toContain("workspace");
@@ -77,7 +79,7 @@ test("Given Morty access from a finished setup, When the user reopens Morty in a
     const app = await createTestApp({ page: { kind: "bootstrap", identity: true }, connectAgent: true });
 
     expect(await app.queryElementByTestId(dataTestId.chatLanding)).toBeInstanceOf(HTMLElement);
-    expect(queryByRole(document.body, "heading", { name: "Connect your local agent" })).toBeNull();
+    expect(queryByRole(document.body, "heading", { name: "Continue your coding session from your phone." })).toBeNull();
     expect(window.location.search).toContain("identity=");
     expect(window.sessionStorage.getItem("mobius.anonymous-credential.v2")).toBeNull();
 });
@@ -311,10 +313,14 @@ test("Given current Morty access, When ending succeeds, Then the setup page conf
         expect(getByRole(document.body, "status").textContent).toContain("Current access ended"),
     );
     expect(document.body.textContent).toContain("Your local agent and tasks keep running");
-    expect(getByRole(document.body, "heading", { name: "Connect your local agent" })).toBeInstanceOf(HTMLElement);
+    expect(
+        getByRole(document.body, "heading", { name: "Continue your coding session from your phone." }),
+    ).toBeInstanceOf(HTMLElement);
     await reloaded.close();
     const nextVisit = await createTestApp({ page: { kind: "bootstrap" } });
-    await nextVisit.waitForView(() => getByRole(document.body, "heading", { name: "Connect your local agent" }));
+    await nextVisit.waitForView(() =>
+        getByRole(document.body, "heading", { name: "Continue your coding session from your phone." }),
+    );
     expect(queryByRole(document.body, "status")).toBeNull();
 });
 
