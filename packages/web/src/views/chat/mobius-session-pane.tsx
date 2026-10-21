@@ -379,6 +379,9 @@ export function MobiusSessionPane({
         },
         [pane],
     );
+    const reloadLocalFile = useCallback(() => {
+        void pane.filePreview.getState().reload(pane.operationsSignal());
+    }, [pane]);
 
     return (
         <>
@@ -655,7 +658,16 @@ export function MobiusSessionPane({
                     )}
                 </BotChatComposer>
             </section>
-            <FilePreview onClose={pane.filePreview.getState().close} state={preview.state} />
+            <FilePreview
+                onClose={preview.close}
+                layout={preview.layout}
+                onPanelAttach={preview.onPanelAttach}
+                onToggleExpanded={preview.toggleExpanded}
+                onHtmlAttach={preview.onHtmlAttach}
+                onHtmlView={preview.showHtml}
+                onReload={reloadLocalFile}
+                state={preview.state}
+            />
         </>
     );
 }
