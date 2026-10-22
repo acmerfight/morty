@@ -220,9 +220,24 @@ test.runIf(process.platform !== "win32")(
     },
 );
 
-for (const failure of ["exit", "signal", "cancel", "recover"]) {
+const starterFailures = [
+    ["exit", "When its starter fails by exit, Then setup reports actionable diagnostics and bounds recovery"],
+    ["signal", "When its starter fails by signal, Then setup reports actionable diagnostics and bounds recovery"],
+    [
+        "cancel",
+        "When its starter fails and setup is cancelled during recovery, Then setup reports actionable diagnostics and bounds recovery",
+    ],
+    ["recover", "When its starter fails by recover, Then setup reports actionable diagnostics and bounds recovery"],
+    [
+        "cancel-upgrade",
+        "When setup is cancelled while the daemon upgrade downloads, Then the upgrade stops the processes it started",
+    ],
+    ["stuck-start", "When setup is cancelled while its starter ignores SIGTERM, Then setup still stops the starter"],
+] as const;
+
+for (const [failure, scenario] of starterFailures) {
     test.runIf(process.platform !== "win32")(
-        `Given an offline managed Runtime, When its starter ${failure === "cancel" ? "fails and setup is cancelled during recovery" : `fails by ${failure}`}, Then setup reports actionable diagnostics and bounds recovery`,
+        `Given an offline managed Runtime, ${scenario}`,
         async () => {
             const directory = await mkdtemp(join(tmpdir(), "morty-setup-start-"));
             const documents = join(directory, "Documents");
@@ -277,13 +292,31 @@ for (const failure of ["exit", "signal", "cancel", "recover"]) {
                 await writeFile(
                     join(bin, "mobius"),
                     `#!${process.execPath}
+import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 const output = process.argv.find(arg => arg.startsWith('--output-json='));
-if (output) { writeFileSync(output.slice('--output-json='.length), readFileSync('connections.json')); }
-else {
+if (process.argv[2] === 'upgrade') {
+    ${
+        failure === "cancel-upgrade"
+            ? `// Like npm downloading a release: a child the CLI stops when it is asked to stop.
+    const download = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    writeFileSync('download.pid', String(download.pid));
+    process.on('SIGTERM', () => { download.kill('SIGTERM'); process.exit(143); });
+    process.kill(process.ppid, 'SIGUSR2');
+    setInterval(() => {}, 1000);`
+            : "// The daemon already runs the newest release, so an upgrade has nothing to do.\n    process.exit(0);"
+    }
+} else if (output) { writeFileSync(output.slice('--output-json='.length), readFileSync('connections.json')); }
+else if (${JSON.stringify(failure === "stuck-start")}) {
+    // A starter that ignores the request to stop and never exits on its own.
+    process.on('SIGTERM', () => {});
+    writeFileSync('starter.pid', String(process.pid));
+    process.kill(process.ppid, 'SIGUSR2');
+    setInterval(() => {}, 1000);
+} else {
     const attempts = Number(readFileSync('attempts.txt', 'utf8')) + 1;
     writeFileSync('attempts.txt', String(attempts));
-    ${failure === "signal" ? "process.kill(process.pid, 'SIGTERM');" : failure === "recover" ? "process.exit(attempts === 1 ? 42 : 0);" : "process.exit(42);"}
+    ${failure === "signal" ? "process.kill(process.pid, 'SIGTERM');" : failure === "recover" ? "process.exit(attempts === 1 ? 42 : 0);" : failure === "cancel-upgrade" ? "process.exit(0);" : "process.exit(42);"}
 }
 `,
                     { mode: 0o700 },
@@ -293,6 +326,7 @@ else {
                     runner,
                     `import { runSetup } from ${JSON.stringify(new URL("../../setup/src/setup.ts", import.meta.url).href)};
 const cancellation = new AbortController();
+process.on('SIGUSR2', () => cancellation.abort());
 let time = Date.parse('2026-09-15T12:00:00Z');
 process.exitCode = await runSetup(process.argv.slice(2), {
     documents: process.env.DOCUMENT_DIR, signal: cancellation.signal,
@@ -326,8 +360,9 @@ process.exitCode = await runSetup(process.argv.slice(2), {
                 let recovery: Promise<void> | undefined;
                 child.stdout.on("data", (chunk) => {
                     output += chunk.toString();
+                    // The started daemon comes online, so setup proceeds to the upgrade or the handoff.
                     if (
-                        failure === "recover" &&
+                        (failure === "recover" || failure === "cancel-upgrade") &&
                         recovery === undefined &&
                         output.includes('"status":"runtime_started"')
                     ) {
@@ -345,6 +380,29 @@ process.exitCode = await runSetup(process.argv.slice(2), {
                     .trim()
                     .split("\n")
                     .map((line) => v.parse(v.record(v.string(), v.unknown()), JSON.parse(line)));
+                if (failure === "cancel-upgrade" || failure === "stuck-start") {
+                    expect(events.at(-1)).toMatchObject({ error: { code: "CANCELLED" } });
+                    const download = Number(
+                        await readFile(
+                            join(directory, failure === "stuck-start" ? "starter.pid" : "download.pid"),
+                            "utf8",
+                        ),
+                    );
+                    let running = true;
+                    try {
+                        process.kill(download, 0);
+                    } catch {
+                        running = false;
+                    }
+                    if (running) {
+                        process.kill(download, "SIGKILL");
+                    }
+                    expect(
+                        running,
+                        `the ${failure === "stuck-start" ? "starter" : "upgrade download"} outlived setup`,
+                    ).toBe(false);
+                    return;
+                }
                 const retries = events.filter((event) => event["status"] === "runtime_retrying");
                 expect(retries, output).toHaveLength(failure === "cancel" || failure === "recover" ? 1 : 2);
                 if (failure === "recover") {
@@ -510,3 +568,150 @@ for (const segments of [4, 8]) {
         },
     );
 }
+
+async function setupMachine(
+    runtime: ControlledSetupRuntime,
+    paths: { readonly origin: string; readonly documents: string; readonly workspace: string },
+    deadline?: (milliseconds: number) => AbortSignal,
+): Promise<{ readonly code: number; readonly events: readonly Readonly<Record<string, unknown>>[] }> {
+    const events: Readonly<Record<string, unknown>>[] = [];
+    let time = Date.parse("2026-10-22T12:00:00Z");
+    const code = await runSetup(
+        [
+            "setup",
+            "--base-url",
+            paths.origin,
+            "--cwd",
+            paths.workspace,
+            "--harness",
+            "settings-test",
+            "--session-id",
+            "native-upgrade-project",
+        ],
+        {
+            documents: paths.documents,
+            signal: AbortSignal.timeout(55_000),
+            runtime,
+            emit: (event) => events.push(event),
+            clock: {
+                now: () => new Date(time),
+                wait: async (milliseconds, signal) => {
+                    signal.throwIfAborted();
+                    time += milliseconds;
+                },
+                ...(deadline === undefined ? {} : { deadline }),
+            },
+        },
+    );
+    const qrPath = events.at(-1)?.["qrPath"];
+    if (typeof qrPath === "string") {
+        await rm(qrPath, { force: true });
+    }
+    return { code, events };
+}
+
+async function withUpgradeMachine(
+    upgrade: ConstructorParameters<typeof ControlledSetupRuntime>[2],
+    scenario: (
+        runtime: ControlledSetupRuntime,
+        paths: { readonly origin: string; readonly documents: string; readonly workspace: string },
+    ) => Promise<void>,
+): Promise<void> {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "morty-setup-upgrade-")));
+    const workspace = join(root, "workspace");
+    await mkdir(workspace, { recursive: true });
+    const fixture = await createIdentityFixture({ appOrigin: await localOrigin() });
+    const runtime = new ControlledSetupRuntime(
+        { agentId: "settings-test", agentName: "Settings Agent", reply: mortyReply, runtime: "previous" },
+        "Setup test Runtime",
+        upgrade,
+    );
+    try {
+        await scenario(runtime, { origin: fixture.origin, documents: join(root, "Documents"), workspace });
+    } finally {
+        await runtime.disconnect();
+        await fixture.close();
+        await rm(root, { recursive: true, force: true });
+    }
+}
+
+test("Given a paired machine whose online daemon runs a previous release, When the user reruns setup and an upgrade is available, Then setup reuses the Runtime on the newest release", {
+    timeout: 90_000,
+}, async () => {
+    await withUpgradeMachine("unavailable", async (runtime, paths) => {
+        const first = await setupMachine(runtime, paths);
+        expect(first.code, JSON.stringify(first.events)).toBe(0);
+        expect(runtime.daemonRelease()).toBe("previous");
+
+        runtime.setUpgrade("available");
+        const rerun = await setupMachine(runtime, paths);
+        expect(rerun.code, JSON.stringify(rerun.events)).toBe(0);
+        expect(rerun.events).toContainEqual(expect.objectContaining({ status: "runtime_already_online" }));
+        expect(rerun.events.at(-1)).toMatchObject({ status: "ready", workspace: paths.workspace });
+        expect(runtime.daemonRelease()).toBe("current");
+    });
+});
+
+test("Given a machine runs a previous daemon release and no upgrade is reachable, When setup prepares the Runtime, Then setup completes on the running release and reports why", {
+    timeout: 60_000,
+}, async () => {
+    await withUpgradeMachine("unavailable", async (runtime, paths) => {
+        const { code, events } = await setupMachine(runtime, paths);
+        expect(code, JSON.stringify(events)).toBe(0);
+        expect(events.at(-1)).toMatchObject({ status: "ready", workspace: paths.workspace });
+        expect(runtime.daemonRelease()).toBe("previous");
+        expect(events).toContainEqual(
+            expect.objectContaining({
+                status: "runtime_upgrade_skipped",
+                error: expect.objectContaining({ code: "RUNTIME_UPGRADE_FAILED" }),
+            }),
+        );
+    });
+});
+
+test("Given a daemon upgrade stops responding, When its budget expires, Then setup completes on the running daemon and reports the timeout", {
+    timeout: 60_000,
+}, async () => {
+    await withUpgradeMachine("unresponsive", async (runtime, paths) => {
+        const budget = new AbortController();
+        const setup = setupMachine(runtime, paths, () => budget.signal);
+        await runtime.upgradeRequested;
+        budget.abort(new DOMException("The upgrade budget elapsed", "TimeoutError"));
+        const { code, events } = await setup;
+        expect(code, JSON.stringify(events)).toBe(0);
+        expect(events.at(-1)).toMatchObject({ status: "ready", workspace: paths.workspace });
+        expect(runtime.daemonRelease()).toBe("previous");
+        expect(events).toContainEqual(
+            expect.objectContaining({
+                status: "runtime_upgrade_skipped",
+                error: expect.objectContaining({ code: "RUNTIME_UPGRADE_TIMEOUT" }),
+            }),
+        );
+    });
+});
+
+test("Given a daemon upgrade is still switching releases when its budget expires, When the manager finishes the switch, Then setup waits for the Runtime and completes on the newest release", {
+    timeout: 60_000,
+}, async () => {
+    await withUpgradeMachine("interrupted-switch", async (runtime, paths) => {
+        const budget = new AbortController();
+        const setup = setupMachine(runtime, paths, () => budget.signal);
+        await runtime.upgradeRequested;
+        budget.abort(new DOMException("The upgrade budget elapsed", "TimeoutError"));
+        const { code, events } = await setup;
+        expect(code, JSON.stringify(events)).toBe(0);
+        expect(events).toContainEqual(
+            expect.objectContaining({
+                status: "runtime_upgrade_skipped",
+                error: expect.objectContaining({ code: "RUNTIME_UPGRADE_TIMEOUT" }),
+            }),
+        );
+        const skipped = events.findIndex((event) => event["status"] === "runtime_upgrade_skipped");
+        const online = events.findIndex((event, index) => index > skipped && event["status"] === "runtime_online");
+        const bound = events.findIndex((event) => event["status"] === "binding_activated");
+        expect(online, JSON.stringify(events)).toBeGreaterThan(skipped);
+        expect(bound, JSON.stringify(events)).toBeGreaterThan(online);
+        expect(events.at(-1)).toMatchObject({ status: "ready", workspace: paths.workspace });
+        expect(runtime.daemonRelease()).toBe("current");
+    });
+});

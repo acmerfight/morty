@@ -18,6 +18,9 @@ type Connection = Readonly<{
     origin: string;
 }>;
 
+/** How `mobius upgrade` behaves on the controlled machine. */
+type ControlledUpgrade = "available" | "unavailable" | "unresponsive" | "interrupted-switch";
+
 /** Setup CLI test port backed by the production daemon and a controlled Agent harness. */
 export class ControlledSetupRuntime implements SetupRuntime {
     readonly #saved = new Map<string, Connection>();
@@ -27,9 +30,20 @@ export class ControlledSetupRuntime implements SetupRuntime {
 
     readonly #options: ControlledAgentBehavior;
     readonly #machineName: string;
-    constructor(options: ControlledAgentBehavior, machineName: string) {
+    #upgrade: ControlledUpgrade;
+    #release: NonNullable<ControlledAgentBehavior["runtime"]>;
+    readonly #upgradeRequested = Promise.withResolvers<void>();
+    /** Settles when setup first asks for an upgrade. */
+    readonly upgradeRequested = this.#upgradeRequested.promise;
+    /**
+     * `options.runtime` is the release the machine's daemon runs before setup.
+     * `upgrade` says how `mobius upgrade` behaves.
+     */
+    constructor(options: ControlledAgentBehavior, machineName: string, upgrade: ControlledUpgrade = "available") {
         this.#machineName = machineName;
         this.#options = options;
+        this.#upgrade = upgrade;
+        this.#release = options.runtime ?? "current";
         // The fixture races failures against the browser scenario; retain early failures too.
         void this.failure.catch(() => undefined);
     }
@@ -61,6 +75,10 @@ export class ControlledSetupRuntime implements SetupRuntime {
             }
             return text(args[index + 1], name);
         };
+        if (args[0] === "upgrade") {
+            await this.#upgradeDaemon(signal);
+            return result;
+        }
         if (args[0] === "start") {
             const connection = this.#saved.get(option("--connection"));
             if (connection === undefined) {
@@ -96,12 +114,77 @@ export class ControlledSetupRuntime implements SetupRuntime {
         return result;
     };
 
+    /** Changes how later `mobius upgrade` runs behave, such as when the registry becomes reachable. */
+    readonly setUpgrade = (upgrade: ControlledUpgrade): void => {
+        this.#upgrade = upgrade;
+    };
+
+    /** The daemon release `mobius --version` reports. */
+    readonly daemonRelease = (): NonNullable<ControlledAgentBehavior["runtime"]> => this.#release;
+
+    // Like `mobius upgrade`: the running daemon switches to the newest release, and
+    // its active connections come back on it.
+    async #upgradeDaemon(signal: AbortSignal): Promise<void> {
+        const cancelled = (): Promise<never> =>
+            new Promise<never>((_resolve, reject) => {
+                signal.throwIfAborted();
+                signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            });
+        switch (this.#upgrade) {
+            case "unavailable":
+                this.#upgradeRequested.resolve();
+                throw new Error("npm could not return a valid latest Mobius version");
+            case "unresponsive":
+                // A download that never finishes: only cancellation ends it.
+                this.#upgradeRequested.resolve();
+                return await cancelled();
+            case "interrupted-switch": {
+                // The manager has stopped the old worker and keeps starting the new one
+                // after the CLI stops waiting, so the Runtime comes back on its own.
+                const switching = this.#switchRelease(signal);
+                this.#pendingSwitch = switching;
+                await this.#switchStarted.promise;
+                this.#upgradeRequested.resolve();
+                return await cancelled();
+            }
+            case "available":
+                break;
+            default:
+                return this.#upgrade satisfies never;
+        }
+        await this.#switchRelease(signal);
+    }
+
+    readonly #switchStarted = Promise.withResolvers<void>();
+    #pendingSwitch: Promise<void> = Promise.resolve();
+
+    // Stops the running daemon and brings its connections back on the newest release.
+    async #switchRelease(signal: AbortSignal): Promise<void> {
+        if (this.#release === "current") {
+            this.#switchStarted.resolve();
+            return;
+        }
+        this.#release = "current";
+        const reconnecting = Array.from(this.#active.keys(), (id) => this.#saved.get(id)).filter(
+            (connection) => connection !== undefined,
+        );
+        await this.disconnect();
+        this.#switchStarted.resolve();
+        // The switch belongs to the manager, so it outlives the upgrade command's signal.
+        for (const connection of reconnecting) {
+            await this.#connect(
+                connection,
+                this.#upgrade === "interrupted-switch" ? new AbortController().signal : signal,
+            );
+        }
+    }
+
     async #connect(connection: Connection, signal: AbortSignal): Promise<void> {
         if (this.#active.has(connection.connection_id)) {
             return;
         }
         const daemon = await connectControlledAgentRuntime({
-            behavior: this.#options,
+            behavior: { ...this.#options, runtime: this.#release },
             connection: {
                 channelId: connection.channel_id,
                 origin: connection.origin,
@@ -118,6 +201,10 @@ export class ControlledSetupRuntime implements SetupRuntime {
     }
 
     readonly disconnect = async (): Promise<void> => {
+        // A switch the manager is finishing completes before its connections stop.
+        const switching = this.#pendingSwitch;
+        this.#pendingSwitch = Promise.resolve();
+        await switching.catch(() => undefined);
         const active = Array.from(this.#active.values());
         this.#active.clear();
         await Promise.all(active.map((daemon) => daemon[Symbol.asyncDispose]()));
