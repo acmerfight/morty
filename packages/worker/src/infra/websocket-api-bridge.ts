@@ -64,7 +64,11 @@ export interface WebSocketBridgeHandlers {
     readonly dispatch: (request: Request) => Promise<Response>;
     readonly subscribe: (
         request: Request,
-        observer: { readonly notify: () => void; readonly publish: (data: string) => void },
+        observer: {
+            readonly ready: (response: Response, body: string) => void;
+            readonly notify: () => void;
+            readonly publish: (data: string) => void;
+        },
         signal: AbortSignal,
         baseline?: string,
     ) => Promise<void>;
@@ -195,6 +199,14 @@ export function createWebSocketApiBridge(
                 .subscribe(
                     request,
                     {
+                        ready: (response, body) =>
+                            send(server, {
+                                kind: "watch.ready",
+                                subscriptionId: frame.subscriptionId,
+                                status: response.status,
+                                headers: [...response.headers],
+                                body,
+                            }),
                         notify: () => send(server, { kind: "notification", subscriptionId: frame.subscriptionId }),
                         publish: (data) => send(server, { data, kind: "event", subscriptionId: frame.subscriptionId }),
                     },

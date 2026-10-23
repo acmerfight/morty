@@ -275,7 +275,9 @@ export const createBotChatHomeStore = (
                 const watchRuntimeConfigurationChanges = async (): Promise<void> => {
                     while (true) {
                         try {
-                            await requests.waitForRuntimeConfigurationChange(botId, signal);
+                            // Adopt the watch's comparison baseline instead of a separate read.
+                            // A brief Runtime change between two reads must not leave the view stale.
+                            await requests.waitForRuntimeConfigurationChange(botId, signal, applyConfiguration);
                         } catch (cause) {
                             if (cause instanceof DOMException && cause.name === "TimeoutError") {
                                 continue;
@@ -283,33 +285,14 @@ export const createBotChatHomeStore = (
                             throw cause;
                         }
                         signal.throwIfAborted();
-                        const changedConfiguration = await requests.runtimeConfiguration(botId, signal);
-                        signal.throwIfAborted();
-                        options.onRuntimeConfiguration?.(changedConfiguration);
-                        const changedReason = setupReason(changedConfiguration);
-                        set((current) =>
-                            current.selection.kind === "draft"
-                                ? {
-                                      runtimeConfiguration: changedConfiguration,
-                                      connectionStatus: runtimeConnectionStatus(changedConfiguration),
-                                      view:
-                                          changedReason === null
-                                              ? { kind: "active", botId }
-                                              : { kind: "setup", botId, reason: changedReason },
-                                  }
-                                : {
-                                      runtimeConfiguration: changedConfiguration,
-                                      connectionStatus: runtimeConnectionStatus(changedConfiguration),
-                                  },
-                        );
                     }
                 };
                 /**
-                 * Re-reads configuration after the bridge returns and moves the
-                 * draft page to the view the recovered configuration implies.
+                 * Publishes the authoritative watch snapshot before announcing it
+                 * to the other workspace workflows.
                  */
-                const applyRecoveredConfiguration = (configuration: BotRuntimeConfiguration): void => {
-                    options.onRuntimeConfiguration?.(configuration);
+                const applyConfiguration = (configuration: BotRuntimeConfiguration): void => {
+                    signal.throwIfAborted();
                     const reason = setupReason(configuration);
                     set((current) =>
                         current.selection.kind === "draft"
@@ -323,14 +306,15 @@ export const createBotChatHomeStore = (
                                   connectionStatus: runtimeConnectionStatus(configuration),
                               },
                     );
+                    options.onRuntimeConfiguration?.(configuration);
                 };
                 /**
                  * A dropped socket takes every watch with it. This loop re-arms
                  * the safe watches every time the bridge returns, so repeated
                  * drops on the same page keep being followed by recovery, and a
                  * drop during the recovery reads themselves re-enters it. The
-                 * recovery only re-reads configuration and pairing: it never
-                 * re-issues a fork/import load that the user did not ask to
+                 * recovery only re-reads pairing and restores configuration watches:
+                 * it never re-issues a fork/import load that the user did not ask to
                  * repeat.
                  */
                 const followConfigurationChanges = async (watchSignal: AbortSignal): Promise<void> => {
@@ -360,9 +344,6 @@ export const createBotChatHomeStore = (
                                     completeSetup();
                                     return;
                                 }
-                                const configuration = await requests.runtimeConfiguration(botId, watchSignal);
-                                watchSignal.throwIfAborted();
-                                applyRecoveredConfiguration(configuration);
                                 dropped = false;
                             }
                             // A configured Machine keeps following workspace

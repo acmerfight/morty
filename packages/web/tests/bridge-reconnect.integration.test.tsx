@@ -2,6 +2,7 @@ import { getByRole, queryByRole } from "@testing-library/dom";
 import { act } from "@testing-library/react";
 import { expect, test } from "vitest";
 import { dataTestId } from "../src/data-testid.ts";
+import type { ApiResponseSnapshot } from "../src/services/api/api-transport.ts";
 import { WebSocketApiTransport } from "../src/services/api/websocket-api-transport.ts";
 import { sendPrompt } from "./infra/application-scenario.ts";
 import { createTestApp } from "./infra/test-app.tsx";
@@ -55,6 +56,51 @@ test("Given a workspace read before an Agent change, When its watch starts after
         expect(after.status).toBe(200);
         expect(await after.text()).toContain('"agentRef":"pi"');
     } finally {
+        transport.dispose();
+    }
+});
+
+test("Given an earlier workspace read, When a snapshot watch starts after an Agent change, Then its snapshot and later notifications use the same current baseline", {
+    timeout: 30_000,
+}, async () => {
+    const clock = new TestClock(CLOCK_ORIGIN);
+    const app = await createTestApp({ agents: [{ id: "codex", label: "Codex" }], connectAgent: true, clock });
+    if (app.daemon === null) {
+        throw new Error("Expected a connected Runtime");
+    }
+    const transport = new WebSocketApiTransport(app.origin, clock);
+    transport.open();
+    const lifetime = new AbortController();
+    try {
+        const signal = AbortSignal.any([lifetime.signal, AbortSignal.timeout(20_000)]);
+        const token = await app.identity.getToken(signal);
+        const workspace = () =>
+            new Request(`${app.origin}/morty/api/chat/projects/${app.identity.projectId}/bots/${app.botId}/workspace`, {
+                method: "POST",
+                headers: { authorization: `Bearer ${token}` },
+                signal,
+            });
+        const before = await transport.fetch(workspace());
+        expect(await before.text()).not.toContain('"agentRef":"pi"');
+        await app.daemon.replaceAgents([
+            { id: "codex", label: "Codex" },
+            { id: "pi", label: "Pi" },
+        ]);
+
+        const ready = Promise.withResolvers<ApiResponseSnapshot>();
+        const watching = transport.waitForChange(workspace(), ready.resolve);
+        void watching.catch(ready.reject);
+        const snapshot = await ready.promise;
+        expect(snapshot.status).toBe(200);
+        expect(snapshot.body).toContain('"agentRef":"pi"');
+
+        await app.daemon.replaceAgents([{ id: "codex", label: "Codex" }]);
+        await watching;
+        const after = await transport.fetch(workspace());
+        expect(after.status).toBe(200);
+        expect(await after.text()).not.toContain('"agentRef":"pi"');
+    } finally {
+        lifetime.abort();
         transport.dispose();
     }
 });

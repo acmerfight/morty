@@ -168,6 +168,9 @@ export function createCloudWebSocketHandlers(dependencies: CloudWebSocketDepende
                         observer.notify();
                         return;
                     }
+                    if (fingerprint === null) {
+                        observer.ready(response, body);
+                    }
                     fingerprint = next;
                 } catch (cause) {
                     signal.throwIfAborted();

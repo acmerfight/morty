@@ -1,6 +1,7 @@
 import * as v from "valibot";
 import { recordBrowserDiagnostic } from "../diagnostics/browser-diagnostics.ts";
 import { type Clock, systemClock } from "../time/clock.ts";
+import type { ApiResponseSnapshot } from "./api-transport.ts";
 
 const responseFrame = v.strictObject({
     kind: v.literal("response"),
@@ -17,6 +18,13 @@ const errorFrame = v.strictObject({
 });
 const pongFrame = v.strictObject({ kind: v.literal("pong") });
 const diagnosticPongFrame = v.strictObject({ kind: v.literal("diagnostic.pong"), requestId: v.string() });
+const watchReadyFrame = v.strictObject({
+    kind: v.literal("watch.ready"),
+    subscriptionId: v.string(),
+    status: v.pipe(v.number(), v.integer(), v.minValue(100), v.maxValue(599)),
+    headers: v.array(v.tuple([v.string(), v.string()])),
+    body: v.string(),
+});
 const notificationFrame = v.strictObject({ kind: v.literal("notification"), subscriptionId: v.string() });
 const eventFrame = v.strictObject({ kind: v.literal("event"), subscriptionId: v.string(), data: v.string() });
 const subscriptionEndFrame = v.strictObject({ kind: v.literal("subscription.end"), subscriptionId: v.string() });
@@ -26,6 +34,7 @@ const serverFrame = v.variant("kind", [
     errorFrame,
     pongFrame,
     diagnosticPongFrame,
+    watchReadyFrame,
     notificationFrame,
     eventFrame,
     subscriptionEndFrame,
@@ -86,6 +95,7 @@ interface PendingRequest {
 }
 
 interface PendingWatch {
+    readonly ready?: (snapshot: ApiResponseSnapshot) => void;
     readonly reject: (cause: unknown) => void;
     readonly resolve: () => void;
     readonly release: () => void;
@@ -226,7 +236,9 @@ export class WebSocketApiTransport {
         request.signal.throwIfAborted();
         return await new Promise<Response>((resolve, reject) => {
             const abort = () => {
-                socket.send(JSON.stringify({ kind: "cancel", requestId }));
+                if (socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({ kind: "cancel", requestId }));
+                }
                 this.#settle(requestId)?.reject(request.signal.reason);
             };
             request.signal.addEventListener("abort", abort, { once: true });
@@ -310,7 +322,10 @@ export class WebSocketApiTransport {
     readonly #watchKey = (request: Request): string =>
         JSON.stringify([request.url, request.headers.get("authorization")]);
 
-    readonly waitForChange = async (request: Request): Promise<void> => {
+    readonly waitForChange = async (
+        request: Request,
+        onReady?: (snapshot: ApiResponseSnapshot) => void,
+    ): Promise<void> => {
         request.signal.throwIfAborted();
         const url = new URL(request.url);
         if (
@@ -330,6 +345,7 @@ export class WebSocketApiTransport {
         const body = requestBody === "" ? null : requestBody;
         request.signal.throwIfAborted();
         const socket = await this.#connectForCall(request.signal);
+        request.signal.throwIfAborted();
         const subscriptionId = crypto.randomUUID();
         return await new Promise<void>((resolve, reject) => {
             const abort = () => {
@@ -338,6 +354,7 @@ export class WebSocketApiTransport {
             };
             request.signal.addEventListener("abort", abort, { once: true });
             this.#watches.set(subscriptionId, {
+                ...(onReady === undefined ? {} : { ready: onReady }),
                 reject,
                 resolve,
                 release: () => request.signal.removeEventListener("abort", abort),
@@ -346,7 +363,10 @@ export class WebSocketApiTransport {
                 socket.send(
                     JSON.stringify({
                         kind: "watch",
-                        baseline: this.#workspaceBaselines.get(this.#watchKey(request)),
+                        // Snapshot consumers adopt this watch's baseline. Notification-only
+                        // consumers retain the preceding read as their comparison point.
+                        baseline:
+                            onReady === undefined ? this.#workspaceBaselines.get(this.#watchKey(request)) : undefined,
                         subscriptionId,
                         method: request.method,
                         path: `${url.pathname}${url.search}`,
@@ -606,6 +626,9 @@ export class WebSocketApiTransport {
         if (this.#state.kind === "connected" && this.#state.socket.readyState === WebSocket.OPEN) {
             return this.#state.socket;
         }
+        if (this.#state.kind === "connected") {
+            this.#dropConnection(bridgeClosed());
+        }
         if (this.#state.kind === "connecting") {
             return await this.#waitForConnection(this.#state.attempt.connection, signal);
         }
@@ -659,7 +682,7 @@ export class WebSocketApiTransport {
                 if (!settle()) {
                     return;
                 }
-                if (this.#disposed || this.#state.kind === "closed") {
+                if (this.#disposed || this.#state.kind !== "connecting" || this.#state.attempt.socket !== socket) {
                     socket.close(1000, "Chat API transport disposed");
                     reject(bridgeClosed());
                     return;
@@ -706,7 +729,11 @@ export class WebSocketApiTransport {
             socket.addEventListener("open", opened, { once: true });
             socket.addEventListener("error", failed, { once: true });
             socket.addEventListener("close", closedWhileConnecting, { once: true });
-            socket.addEventListener("message", this.#receive);
+            socket.addEventListener("message", (event) => {
+                if (this.#state.kind === "connected" && this.#state.socket === socket) {
+                    this.#receive(event);
+                }
+            });
             socket.addEventListener(
                 "close",
                 (event) => {
@@ -801,6 +828,22 @@ export class WebSocketApiTransport {
         }
         if (frame.kind === "notification") {
             this.#settleWatch(frame.subscriptionId)?.resolve();
+            return;
+        }
+        if (frame.kind === "watch.ready") {
+            const pending = this.#watches.get(frame.subscriptionId);
+            if (pending?.ready !== undefined) {
+                try {
+                    pending.ready({ status: frame.status, headers: new Headers(frame.headers), body: frame.body });
+                } catch (cause) {
+                    if (this.#settleWatch(frame.subscriptionId) !== undefined) {
+                        this.#sendIfConnected(
+                            JSON.stringify({ kind: "unwatch", subscriptionId: frame.subscriptionId }),
+                        );
+                        pending.reject(cause);
+                    }
+                }
+            }
             return;
         }
         if (frame.kind === "event") {

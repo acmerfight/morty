@@ -232,7 +232,7 @@ export function BotChatHome({
                                 )}
                             </div>
                         </FollowLatestScrollArea>
-                        {model.view.kind === "active" && model.selection.kind === "draft" && (
+                        {model.runtimeConfiguration !== null && model.selection.kind === "draft" && (
                             <BotChatComposer
                                 attachmentModel={attachmentModel}
                                 attachmentSignal={workspace.operationsSignal()}
@@ -246,6 +246,7 @@ export function BotChatHome({
                                 }}
                                 outputState="idle"
                                 submitDisabled={
+                                    model.view.kind !== "active" ||
                                     creationBusy ||
                                     (draft.trim().length === 0 && attachmentModel.attachments.length === 0) ||
                                     model.draftSettings === null
@@ -254,7 +255,7 @@ export function BotChatHome({
                                 <DraftChatControls
                                     key={model.selection.key}
                                     workspace={workspace}
-                                    disabled={composerLocked}
+                                    disabled={composerLocked || model.view.kind !== "active"}
                                 />
                             </BotChatComposer>
                         )}
