@@ -32,7 +32,6 @@ import { createBrowserFilePreviewStore } from "./file-preview-store.ts";
 import type { OpenMobiusSession } from "./open-session.ts";
 import { type SessionActivityState, sameSessionActivity, workingCommandId } from "./session-activity-machine.ts";
 import {
-    connectionErrorMessage,
     connectionFailure,
     disconnectedConnection,
     isConnectionSettled,
@@ -165,6 +164,7 @@ export function sessionPanePresentation(
     queue: SessionMessageQueueStore,
     attachments: ComposerAttachmentStore,
     interactions: SessionInteractionStore,
+    connectionAvailable = true,
 ) {
     const needsApproval = interactions.interactions.some(
         (interaction) => interaction.kind === "permission" && interaction.permission.state.kind === "pending",
@@ -180,6 +180,7 @@ export function sessionPanePresentation(
     const controlRunning = model.runningTurn !== null;
     const stopping = stopRequested(tasks, model.runningTurn);
     const composerDisabled =
+        !connectionAvailable ||
         model.connection.kind !== "ready" ||
         delivery.state.kind === "submitting" ||
         delivery.state.kind === "delivery-unknown" ||
@@ -189,7 +190,7 @@ export function sessionPanePresentation(
         queue.operation.kind === "submitting" ||
         stopping;
     const composerInputDisabled =
-        (model.connection.kind !== "ready" && model.connection.kind !== "loading") ||
+        model.connection.kind === "closed" ||
         delivery.state.kind === "submitting" ||
         delivery.state.kind === "delivery-unknown" ||
         model.operation.kind === "sending" ||
@@ -230,6 +231,7 @@ export function sessionPanePresentation(
         busy,
         composerDisabled,
         composerInputDisabled,
+        stopDisabled: !connectionAvailable || model.connection.kind !== "ready",
         canSuggestProgress:
             !busy &&
             !controlRunning &&
@@ -238,13 +240,12 @@ export function sessionPanePresentation(
             attachments.state.kind !== "reading",
         // Operations that failed because the Session closed say nothing the closed notice does not already say.
         composerError:
-            connectionErrorMessage(model.connection) ??
-            (model.connection.kind === "closed"
+            model.connection.kind === "closed"
                 ? ""
                 : ([model.activity, model.operation, delivery.state].find((state) => state.kind === "failed")
                       ?.message ??
                   stopFailure(tasks) ??
-                  (queue.feedback.kind === "failed" ? queue.feedback.message : ""))),
+                  (queue.feedback.kind === "failed" ? queue.feedback.message : "")),
         controlRunning,
         deliveryUnknownUserMessageId,
         hasOlderHistory: model.hasOlderHistory,
@@ -265,6 +266,7 @@ export function sessionPanePresentation(
             model.messages.some((message) => message.role === "user" && message.commandId === activeCommandId),
         shouldQueueOnSubmit: controlRunning && !stopping,
         submitDisabled:
+            !connectionAvailable ||
             model.connection.kind !== "ready" ||
             (controlRunning && !stopping ? queue.operation.kind !== "idle" : busy) ||
             attachments.state.kind === "reading" ||
@@ -1213,18 +1215,14 @@ export function createSessionPaneModel(options: {
                         if (closure !== null) {
                             continue;
                         }
-                        if (!isRetryableRuntimeConnectionFailure(cause)) {
-                            const message = formatError(cause, "The Session could not be opened.");
-                            setAndSettle({
-                                connection: { kind: "failed", message },
-                            });
-                            return;
-                        }
+                        const retryable = isRetryableRuntimeConnectionFailure(cause);
                         if (recoveryRequested) {
                             recoveryRequested = false;
                             consecutiveFailures = 0;
                         }
-                        const retry = sessionReconnectAttempt(consecutiveFailures);
+                        const retry = retryable
+                            ? sessionReconnectAttempt(consecutiveFailures)
+                            : { kind: "exhausted" as const };
                         consecutiveFailures += 1;
                         recordBrowserDiagnostic({
                             at: new Date().toISOString(),
@@ -1237,10 +1235,9 @@ export function createSessionPaneModel(options: {
                         });
                         const message = formatError(cause, "The Session could not be opened.");
                         setAndSettle({
-                            connection: disconnectedConnection(
-                                message,
-                                retry.kind === "scheduled" ? retry.delayMs : null,
-                            ),
+                            connection: retryable
+                                ? disconnectedConnection(message, retry.kind === "scheduled" ? retry.delayMs : null)
+                                : { kind: "failed", message },
                         });
                         countdownInterrupt = new AbortController();
                         const retrySignal = AbortSignal.any([signal, countdownInterrupt.signal]);
