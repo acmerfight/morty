@@ -6,6 +6,8 @@ import {
     hasStoredAccess,
     rememberComputerVisit,
     rememberedComputers,
+    resumesComputer,
+    settleResumedComputer,
 } from "../../services/identity/remembered-computers.ts";
 import {
     accessEndedComputerEntry,
@@ -82,6 +84,9 @@ export const createAnonymousSessionStore = (
                         return;
                     }
                     if (hasIdentityScope()) {
+                        // A place this browser remembered falls back to the computer's home when it is gone; a link
+                        // someone gave the user reports that it no longer opens.
+                        const entry = resumesComputer() ? "restore" : "address";
                         const identity = await api.loadExisting(signal);
                         signal.throwIfAborted();
                         if (identity === null) {
@@ -93,7 +98,8 @@ export const createAnonymousSessionStore = (
                             });
                             return;
                         }
-                        activate(identity, "address", null);
+                        settleResumedComputer();
+                        activate(identity, entry, null);
                         return;
                     }
                     const ended = centralSessionStorage.read(accessEndedNoticeEntry) === "ended";
