@@ -14,7 +14,12 @@ import {
     newConversationDraftEntry,
 } from "../../services/session-storage/central-session-storage.ts";
 import { formatError } from "../format-error.ts";
-import { type ConversationCreationState, transitionConversationCreation } from "./conversation-creation-machine.ts";
+import {
+    type ConversationCreationState,
+    type FirstMessages,
+    transitionConversationCreation,
+    transitionFirstMessages,
+} from "./conversation-creation-machine.ts";
 import {
     type ConversationSelectionState,
     type ConversationTarget,
@@ -22,6 +27,7 @@ import {
     transitionConversationSelection,
 } from "./conversation-selection-machine.ts";
 import { createConversationSessionStore } from "./conversation-session-store.ts";
+import type { OpenMobiusSession } from "./open-session.ts";
 import type { UnconfirmedSubmission } from "./session-delivery-store.ts";
 
 export type BotChatHomeStoreApi = ReturnType<typeof createBotChatHomeStore>;
@@ -123,9 +129,13 @@ export interface BotChatHomeStore {
     readonly setNetworkAvailable: (available: boolean) => void;
     readonly selection: ConversationSelectionState;
     readonly creation: ConversationCreationState;
+    /** First messages of created conversations that the service has not accepted yet, whichever is on screen. */
+    readonly firstMessages: FirstMessages;
     readonly revision: number;
     readonly directoryRevision: number;
     readonly draft: string;
+    /** The draft the composer text belongs to. Only starting a new draft changes it. */
+    readonly draftKey: string;
     readonly draftSettings: ChatDraftConfiguration | null;
     /** Bumped whenever the message list should re-arm following the latest message. */
     readonly scrollFollowRevision: number;
@@ -278,9 +288,11 @@ export const createBotChatHomeStore = (
             },
             selection,
             creation: { kind: "draft" },
+            firstMessages: new Map(),
             revision: 0,
             directoryRevision: 0,
             draft: "",
+            draftKey: selection.kind === "draft" ? selection.key : options.createId(),
             draftSettings: null,
             scrollFollowRevision: 0,
             pairingDialogOpen: false,
@@ -693,13 +705,15 @@ export const createBotChatHomeStore = (
                     centralSessionStorage.remove(newConversationDraftEntry(current.view.botId));
                 }
                 options.navigation.showDraft();
+                const draftKey = options.createId();
                 set((state) => ({
                     selection: transitionConversationSelection(state.selection, {
                         kind: "draft-selected",
-                        key: options.createId(),
+                        key: draftKey,
                     }),
                     creation: transitionConversationCreation(state.creation, { kind: "reset" }),
                     draft: "",
+                    draftKey,
                     draftSettings: null,
                     scrollFollowRevision: state.scrollFollowRevision + 1,
                     revision: state.view.kind === "active" ? state.revision : state.revision + 1,
@@ -775,29 +789,24 @@ export const createBotChatHomeStore = (
                 })),
             initialMessageDelivered: (conversationId) =>
                 set((state) => ({
-                    creation: transitionConversationCreation(state.creation, {
-                        conversationId,
-                        kind: "initial-message-delivered",
-                    }),
+                    firstMessages: transitionFirstMessages(state.firstMessages, { kind: "delivered", conversationId }),
                 })),
             initialMessageRecoveryCleared: (conversationId, commandId) =>
                 set((state) => ({
-                    creation: transitionConversationCreation(state.creation, {
-                        commandId,
+                    firstMessages: transitionFirstMessages(state.firstMessages, {
+                        kind: "discarded",
                         conversationId,
-                        kind: "initial-message-discarded",
+                        commandId,
                     }),
                 })),
             initialMessageUnconfirmed: (conversationId, journal) =>
-                set((state) => {
-                    const creation = transitionConversationCreation(state.creation, {
+                set((state) => ({
+                    firstMessages: transitionFirstMessages(state.firstMessages, {
+                        kind: "unconfirmed",
+                        conversationId,
                         journal,
-                        kind: "initial-message-unconfirmed",
-                    });
-                    return creation.kind === "initial-message-unconfirmed" && creation.conversationId === conversationId
-                        ? { creation }
-                        : {};
-                }),
+                    }),
+                })),
             createConversation: async (signal) => {
                 const current = get();
                 const { attachments, state: attachmentState } = composerAttachments.getState();
@@ -869,58 +878,72 @@ export const createBotChatHomeStore = (
                         return false;
                     }
                 }
+                signal.throwIfAborted();
+                const conversationId = access.conversationId;
+                // The conversation exists, so its first message belongs to it from now on, whatever is on screen.
+                // The page follows it only if the user is still on this draft.
                 const sending = get().creation;
-                if (sending.kind !== "draft-message-sending" || sending.message.commandId !== commandId) {
-                    return false;
-                }
-                try {
-                    signal.throwIfAborted();
-                    const session = requests.conversationSession(
-                        access,
-                        { kind: "idle" },
-                        settings.workspaceLabel,
-                        title,
-                    );
-                    set((state) => ({
-                        creation: transitionConversationCreation(state.creation, {
-                            commandId,
-                            conversationId: access.conversationId,
-                            kind: "initial-message-pending",
-                            session,
-                        }),
-                    }));
-                    const sent = get().creation;
-                    if (sent.kind !== "initial-message-pending") {
+                const following = sending.kind === "draft-message-sending" && sending.message.commandId === commandId;
+                let session: OpenMobiusSession | null = null;
+                if (following) {
+                    try {
+                        session = requests.conversationSession(
+                            access,
+                            { kind: "idle" },
+                            settings.workspaceLabel,
+                            title,
+                        );
+                    } catch (cause) {
+                        set((state) => ({
+                            creation: transitionConversationCreation(state.creation, {
+                                commandId,
+                                error: formatError(cause, "The message could not be sent."),
+                                kind: "draft-message-send-failed",
+                            }),
+                        }));
                         return false;
                     }
-                    options.navigation.showManaged(false, sent.conversationId);
-                    set((state) => ({
-                        draft: "",
-                        scrollFollowRevision: state.scrollFollowRevision + 1,
-                        selection: transitionConversationSelection(state.selection, {
-                            kind: "conversation-created",
-                            conversationId: sent.conversationId,
-                            session: sent.session,
-                        }),
-                        directoryRevision: state.directoryRevision + 1,
-                    }));
-                    announceSelection();
-                    onConversationCreated(sent.conversationId, sent.message.summary);
-                    onDirectoryRefreshed();
-                    composerAttachments.getState().clear();
-                    centralSessionStorage.remove(newConversationDraftEntry(activeBotId));
-                    return true;
-                } catch (cause) {
-                    signal.throwIfAborted();
-                    set((state) => ({
-                        creation: transitionConversationCreation(state.creation, {
-                            commandId,
-                            error: formatError(cause, "The message could not be sent."),
-                            kind: "draft-message-send-failed",
-                        }),
-                    }));
-                    return false;
+                    options.navigation.showManaged(false, conversationId);
                 }
+                set((state) => ({
+                    firstMessages: transitionFirstMessages(state.firstMessages, {
+                        kind: "queued",
+                        conversationId,
+                        message: queuedMessage,
+                    }),
+                    directoryRevision: state.directoryRevision + 1,
+                    ...(session !== null
+                        ? {
+                              creation: transitionConversationCreation(state.creation, {
+                                  commandId,
+                                  kind: "conversation-created",
+                              }),
+                              draft: "",
+                              scrollFollowRevision: state.scrollFollowRevision + 1,
+                              selection: transitionConversationSelection(state.selection, {
+                                  kind: "conversation-created",
+                                  conversationId,
+                                  session,
+                              }),
+                          }
+                        : // The draft text was sent with this conversation, so it must not be offered again. A
+                          // new draft started meanwhile owns whatever text the composer holds now.
+                          state.draftKey === commandId
+                          ? { draft: "" }
+                          : {}),
+                }));
+                if (following) {
+                    announceSelection();
+                }
+                onConversationCreated(conversationId, queuedMessage.summary);
+                onDirectoryRefreshed();
+                if (following) {
+                    composerAttachments.getState().clear();
+                }
+                if (get().draftKey === commandId) {
+                    centralSessionStorage.remove(newConversationDraftEntry(activeBotId));
+                }
+                return true;
             },
         };
     });
