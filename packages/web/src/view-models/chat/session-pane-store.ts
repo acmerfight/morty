@@ -222,7 +222,24 @@ export function sessionPanePresentation(
                   images: unconfirmed.request.images,
                   resources: unconfirmed.request.resources,
               };
+    const activity = model.activity;
+    const hasFailureCard =
+        activity.kind === "failed" &&
+        model.messages.some(
+            (message) =>
+                message.commandId === activity.commandId &&
+                message.role === "assistant" &&
+                message.presentation.kind === "failure",
+        );
+    const authenticationFailure =
+        model.connection.kind !== "closed" &&
+        activity.kind === "failed" &&
+        activity.code === "authentication_required" &&
+        !hasFailureCard
+            ? activity
+            : null;
     return {
+        authenticationFailure,
         activeMessageId,
         activeCommandId,
         busy,
@@ -239,8 +256,14 @@ export function sessionPanePresentation(
         composerError:
             model.connection.kind === "closed"
                 ? ""
-                : ([model.activity, model.operation, delivery.state].find((state) => state.kind === "failed")
-                      ?.message ??
+                : ([model.activity, model.operation, delivery.state]
+                      .filter((state) => state.kind === "failed")
+                      .find(
+                          (state) =>
+                              // A turn failure belongs to its timeline card. Keep the
+                              // composer fallback only when that command has no card.
+                              !("commandId" in state) || (!hasFailureCard && authenticationFailure === null),
+                      )?.message ??
                   stopFailure(tasks) ??
                   (queue.feedback.kind === "failed" ? queue.feedback.message : "")),
         controlRunning,
@@ -882,7 +905,11 @@ export function createSessionPaneModel(options: {
             } catch (cause) {
                 signal.throwIfAborted();
                 const message = formatError(cause, "The agent could not complete the message.");
-                updateTurn({ kind: "submission-ended", commandId, failure: message });
+                updateTurn({
+                    kind: "submission-ended",
+                    commandId,
+                    failure: { code: cause instanceof MobiusError ? cause.code : "", message },
+                });
                 set({ pendingInitialMessage: null, operation: { kind: "failed", message } });
                 announceActivity();
             }
@@ -1036,7 +1063,8 @@ export function createSessionPaneModel(options: {
                                 updateTurn({
                                     kind: "ended",
                                     commandId: fact.commandId,
-                                    failure: fact.kind === "turn-failed" ? fact.message : null,
+                                    failure:
+                                        fact.kind === "turn-failed" ? { code: fact.code, message: fact.message } : null,
                                 });
                                 const completed = deriveTimeline();
                                 set({
