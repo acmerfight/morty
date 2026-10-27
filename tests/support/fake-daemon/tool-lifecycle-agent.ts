@@ -12,6 +12,7 @@ export function createToolLifecycleAgent() {
     const sessions = new Map<string, acp.SessionNotification[]>();
     const steeringToolCounts = new Map<string, number>();
     const heldSteering = new Set<string>();
+    const delayedUserMessages = new Map<string, acp.SessionUpdate[]>();
     const createEndpoint = (onSessionUpdate: ControlledSessionUpdate): InProcessAcpEndpoint => {
         const termination = Promise.withResolvers<AcpEndpointTermination>();
         const lifetime = new AbortController();
@@ -61,6 +62,19 @@ export function createToolLifecycleAgent() {
                     history.push(event);
                     await onSessionUpdate(event);
                 };
+                const messageId = crypto.randomUUID();
+                const userUpdates: acp.SessionUpdate[] = context.params.prompt.map((content) => ({
+                    sessionUpdate: "user_message_chunk",
+                    messageId,
+                    content,
+                }));
+                if (prompt === "hold delayed initial message" || prompt === "hold before first acp") {
+                    delayedUserMessages.set(sessionId, userUpdates);
+                } else {
+                    for (const update of userUpdates) {
+                        await emit(update);
+                    }
+                }
                 const emitText = async (text: string) =>
                     await emit({
                         sessionUpdate: "agent_message_chunk",
@@ -89,7 +103,7 @@ export function createToolLifecycleAgent() {
                             content: [],
                         });
                         await emitText("Background verification launched.");
-                        return { stopReason: "end_turn" };
+                        return { stopReason: "end_turn", _meta: { messageId } };
                     }
                     const backgroundStatus = prompt.replace("finish background verification ", "");
                     if (
@@ -110,7 +124,7 @@ export function createToolLifecycleAgent() {
                                 },
                             ],
                         });
-                        return { stopReason: "end_turn" };
+                        return { stopReason: "end_turn", _meta: { messageId } };
                     }
                     if (prompt === "answer after verification" || prompt === "answer then hold") {
                         await emitTool("Completed verification", "completed", []);
@@ -134,7 +148,7 @@ export function createToolLifecycleAgent() {
                         await emitText("Checking the failed verification.");
                         await emitTool("Failed verification", "failed", []);
                         await emitText("Verification finished with one failure.");
-                        return { stopReason: "end_turn" };
+                        return { stopReason: "end_turn", _meta: { messageId } };
                     }
                     for (const [title, status] of [
                         ["Completed verification", "completed"],
@@ -142,6 +156,9 @@ export function createToolLifecycleAgent() {
                         ["Unfinished verification", "in_progress"],
                         ["Pending verification", "pending"],
                     ] satisfies readonly (readonly [string, acp.ToolCallStatus])[]) {
+                        if (prompt === "hold before first acp") {
+                            break;
+                        }
                         const event: acp.SessionNotification = {
                             sessionId,
                             update: {
@@ -161,11 +178,11 @@ export function createToolLifecycleAgent() {
                     }
                     for (const stopReason of ["max_tokens", "max_turn_requests", "refusal"] as const) {
                         if (prompt === `stop with ${stopReason}`) {
-                            return { stopReason };
+                            return { stopReason, _meta: { messageId } };
                         }
                     }
                     if (prompt === "complete unfinished tools") {
-                        return { stopReason: "end_turn" };
+                        return { stopReason: "end_turn", _meta: { messageId } };
                     }
                     const finished = Promise.withResolvers<acp.PromptResponse>();
                     const abort = () => finished.resolve({ stopReason: "cancelled" });
@@ -180,6 +197,7 @@ export function createToolLifecycleAgent() {
                     }
                 } finally {
                     turns.delete(sessionId);
+                    delayedUserMessages.delete(sessionId);
                 }
             })
             .onRequest(
@@ -200,6 +218,33 @@ export function createToolLifecycleAgent() {
                         return { outcome: "promptRequired" };
                     }
                     const count = steeringToolCounts.get(params.sessionId) ?? 1;
+                    for (const update of delayedUserMessages.get(params.sessionId) ?? []) {
+                        const event: acp.SessionNotification = { sessionId: params.sessionId, update };
+                        history.push(event);
+                        await onSessionUpdate(event);
+                    }
+                    delayedUserMessages.delete(params.sessionId);
+                    const messageId = crypto.randomUUID();
+                    const prompt: unknown = Reflect.get(params, "prompt");
+                    if (!Array.isArray(prompt)) {
+                        throw new Error("Invalid steering content");
+                    }
+                    for (const block of prompt) {
+                        if (typeof block !== "object" || block === null || Reflect.get(block, "type") !== "text") {
+                            throw new Error("Invalid steering content");
+                        }
+                        const text: unknown = Reflect.get(block, "text");
+                        if (typeof text !== "string") {
+                            throw new Error("Invalid steering text");
+                        }
+                        const content: acp.ContentBlock = { type: "text", text };
+                        const event: acp.SessionNotification = {
+                            sessionId: params.sessionId,
+                            update: { sessionUpdate: "user_message_chunk", messageId, content },
+                        };
+                        history.push(event);
+                        await onSessionUpdate(event);
+                    }
                     for (let index = 0; index < count; index += 1) {
                         const event: acp.SessionNotification = {
                             sessionId: params.sessionId,

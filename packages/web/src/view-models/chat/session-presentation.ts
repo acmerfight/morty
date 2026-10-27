@@ -73,6 +73,12 @@ export interface SessionTimeline {
     readonly messages: readonly SessionMessage[];
 }
 
+export type SessionExecutionMessage = SessionMessage & {
+    readonly executionContext:
+        | { readonly kind: "unmanaged" }
+        | { readonly kind: "managed"; readonly commandId: string };
+};
+
 function exhaustive(value: never): never {
     throw new Error(`Unsupported Session Event Log payload: ${JSON.stringify(value)}`);
 }
@@ -399,7 +405,11 @@ type SessionEventResult =
           readonly kind: "turn-requested";
           readonly commandId: string;
           readonly executionCommandId: string;
-          readonly message: SessionMessage | null;
+          readonly execution: "starts" | "steers";
+      }
+    | {
+          readonly kind: "turn-ended";
+          readonly message: SessionMessage;
       }
     | {
           readonly kind: "constructed";
@@ -467,7 +477,12 @@ type ReducedSessionEntry =
     | ReducedSessionMessage
     | { readonly kind: "turn-started"; readonly commandId: string }
     | { readonly kind: "execution-idle" }
-    | { readonly kind: "execution-owner"; readonly commandId: string; readonly executionCommandId: string };
+    | {
+          readonly kind: "execution-owner";
+          readonly commandId: string;
+          readonly executionCommandId: string;
+          readonly execution: "starts" | "steers";
+      };
 
 export interface SessionMessageReduction {
     readonly entries: readonly ReducedSessionEntry[];
@@ -489,8 +504,7 @@ function consumeSessionEvent(
             lifecycle.kind === "prompt.failed-before-start"
         ) {
             return {
-                kind: "constructed",
-                firstEvent: "known",
+                kind: "turn-ended",
                 message: {
                     role: "assistant",
                     commandId: lifecycle.commandId,
@@ -503,7 +517,6 @@ function consumeSessionEvent(
             };
         }
         if (lifecycle.kind === "prompt.requested") {
-            const contents = lifecycle.content.filter((content) => !isBotInstructions(content)).map(userDisplayContent);
             return {
                 kind: "turn-requested",
                 commandId: lifecycle.commandId,
@@ -511,16 +524,7 @@ function consumeSessionEvent(
                     lifecycle.disposition === "steer"
                         ? (lifecycle.targetCommandId ?? lifecycle.commandId)
                         : lifecycle.commandId,
-                message:
-                    contents.length === 0
-                        ? null
-                        : {
-                              commandId: lifecycle.commandId,
-                              contents,
-                              execution: lifecycle.disposition === "steer" ? "steers" : "starts",
-                              firstEvent: event,
-                              role: "user",
-                          },
+                execution: lifecycle.disposition === "steer" ? "steers" : "starts",
             };
         }
         return { kind: "skipped" };
@@ -578,10 +582,9 @@ function consumeSessionEvent(
                 const first = entry.message.firstEvent;
                 return (
                     first.sessionGenerationId === event.sessionGenerationId &&
-                    (first.type === "acp"
-                        ? first.payload.sessionUpdate === "user_message_chunk" &&
-                          first.payload.messageId === update.messageId
-                        : first.payload.kind === "prompt.requested" && first.eventId === update.messageId)
+                    first.type === "acp" &&
+                    first.payload.sessionUpdate === "user_message_chunk" &&
+                    first.payload.messageId === update.messageId
                 );
             });
             const existing = entries[existingIndex];
@@ -589,11 +592,7 @@ function consumeSessionEvent(
                 return {
                     index: existingIndex,
                     kind: "consumed",
-                    // A live request already contains all its projected content blocks.
-                    message:
-                        existing.message.firstEvent.type === "lifecycle-metadata"
-                            ? existing.message
-                            : { ...existing.message, contents: [...existing.message.contents, ...message.contents] },
+                    message: { ...existing.message, contents: [...existing.message.contents, ...message.contents] },
                 };
             }
         }
@@ -650,21 +649,22 @@ function applySessionEvent(
 ): readonly ReducedSessionEntry[] {
     switch (result.kind) {
         case "turn-requested": {
-            const withOwner: readonly ReducedSessionEntry[] = [
+            return [
                 ...entries,
                 {
                     kind: "execution-owner",
                     commandId: result.commandId,
                     executionCommandId: result.executionCommandId,
+                    execution: result.execution,
                 },
             ];
-            return result.message === null
-                ? withOwner
-                : applySessionEvent(withOwner, event, {
-                      kind: "constructed",
-                      firstEvent: "known",
-                      message: result.message,
-                  });
+        }
+        case "turn-ended": {
+            return applySessionEvent(entries, event, {
+                kind: "constructed",
+                firstEvent: "known",
+                message: result.message,
+            });
         }
         case "turn-started":
             return [...entries, result];
@@ -765,8 +765,8 @@ export function sessionReductionExecutionOwner(reduction: SessionMessageReductio
     return owner?.kind === "execution-owner" ? owner.executionCommandId : null;
 }
 
-export function sessionReductionMessages(reduction: SessionMessageReduction): readonly SessionMessage[] {
-    const messages: SessionMessage[] = [];
+export function sessionReductionMessages(reduction: SessionMessageReduction): readonly SessionExecutionMessage[] {
+    const messages: SessionExecutionMessage[] = [];
     const unfinished = new Map<string | null, number[]>();
     const executionOwners = new Map<string, string>();
     let turn: { readonly kind: "unknown" } | { readonly kind: "active" | "terminal"; readonly commandId: string } = {
@@ -835,7 +835,11 @@ export function sessionReductionMessages(reduction: SessionMessageReduction): re
                 unfinished.set(commandId, indexes);
             }
         }
-        messages.push(message);
+        messages.push({
+            ...message,
+            executionContext:
+                turn.kind === "unknown" ? { kind: "unmanaged" } : { kind: "managed", commandId: turn.commandId },
+        });
         const event = message.firstEvent;
         if (event.type !== "lifecycle-metadata") {
             continue;
@@ -915,7 +919,7 @@ function terminalExecutionState(message: SessionMessage): SessionExecutionState 
 
 /** Returns, for each message, the state of the execution that owns it. */
 export function sessionExecutionStates(
-    messages: readonly SessionMessage[],
+    messages: readonly SessionExecutionMessage[],
     sessionWorking: boolean,
 ): readonly SessionExecutionState[] {
     interface Span {
@@ -925,16 +929,28 @@ export function sessionExecutionStates(
     }
     const spans: Span[] = [];
     let current: Span = { start: 0, managed: false, terminal: null };
+    let executionCommandId: string | null = null;
     for (const [index, message] of messages.entries()) {
+        const context = message.executionContext;
+        if (context.kind === "managed") {
+            if (executionCommandId !== null && executionCommandId !== context.commandId) {
+                spans.push(current);
+                current = { start: index, managed: true, terminal: null };
+            }
+            executionCommandId = context.commandId;
+            current.managed = true;
+        }
         if (index > 0 && message.role === "user") {
             const starts =
-                message.execution === "starts" ||
-                // An Agent-reported user message cannot interrupt an execution Morty
-                // is still waiting on; it may be the Agent echoing a steering message.
-                (message.execution === "unknown" && !(current.managed && current.terminal === null));
+                context.kind === "unmanaged" &&
+                (message.execution === "starts" ||
+                    // An Agent-reported user message cannot interrupt an execution Morty
+                    // is still waiting on; it may be the Agent echoing a steering message.
+                    (message.execution === "unknown" && !(current.managed && current.terminal === null)));
             if (starts) {
                 spans.push(current);
                 current = { start: index, managed: false, terminal: null };
+                executionCommandId = null;
             }
         }
         if (message.role === "user" && message.execution !== "unknown") {

@@ -57,7 +57,7 @@ import { createSessionMessageQueueStore, type SessionMessageQueueStore } from ".
 import type { ElicitationInteractionResponse, PermissionInteractionResponse } from "./session-pane-types.ts";
 import {
     createSessionMessageReduction,
-    type SessionMessage,
+    type SessionExecutionMessage,
     sessionEventCommandIds,
     sessionReductionMessages,
 } from "./session-presentation.ts";
@@ -110,7 +110,7 @@ export interface SessionPaneStore {
     readonly connection: SessionConnection;
     readonly title: string;
     readonly titleEdit: TitleEdit;
-    readonly messages: readonly SessionMessage[];
+    readonly messages: readonly SessionExecutionMessage[];
     readonly pendingInitialMessage: QueuedDraftMessage | null;
     readonly olderHistory: OlderHistory;
     readonly historyRevision: number;
@@ -286,12 +286,7 @@ export function sessionPanePresentation(
                     : controlRunning
                       ? "running"
                       : "idle",
-        workingIndicatorVisible:
-            !waitingForInput &&
-            activeCommandId !== null &&
-            // History restores user content without its live command ID. Session
-            // activity owns whether work is running; history only gates placement.
-            model.messages.some((message) => message.role === "user"),
+        workingIndicatorVisible: !waitingForInput && controlRunning,
         shouldQueueOnSubmit: controlRunning && !stopping,
         submitDisabled:
             !connectionAvailable ||
@@ -491,7 +486,7 @@ export function createSessionPaneModel(options: {
         return await client.turns.submit(sessionId, request, signal);
     });
     const lastSentMessageEntry = sessionLastSentMessageEntry(sessionId);
-    const deriveTimeline = (): { readonly messages: readonly SessionMessage[] } => ({
+    const deriveTimeline = (): { readonly messages: readonly SessionExecutionMessage[] } => ({
         messages: sessionProjectionMessages(projection),
     });
     const tasks = createSessionTaskControlsStore({
@@ -664,18 +659,13 @@ export function createSessionPaneModel(options: {
             projection = result.state;
             const pagination = sessionProjectionPagination(projection);
             const messages = sessionProjectionMessages(projection);
-            const initialMessage = get().pendingInitialMessage;
             set({
                 hasOlderHistory: pagination !== null,
                 historyRevision: projection.revision,
                 messages,
+                // Lifecycle bookkeeping does not replace the preview; wait for Agent output.
                 pendingInitialMessage:
-                    initialMessage !== null &&
-                    messages.some(
-                        (message) => message.role === "user" && message.commandId === initialMessage.commandId,
-                    )
-                        ? null
-                        : initialMessage,
+                    input.kind === "live-event" && input.event.type === "acp" ? null : get().pendingInitialMessage,
             });
             for (const effect of result.effects) {
                 if (effect.kind !== "adopted") {
