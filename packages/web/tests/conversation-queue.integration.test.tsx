@@ -166,7 +166,7 @@ test("Given a follow-up is queued and the user has started another draft, When t
     expect(document.body.textContent).not.toContain("Files attached to the queued message");
 });
 
-test("Given a follow-up with a file was queued from another browser, When this viewer edits it, Then its text and file return to this viewer's composer", {
+test("Given a follow-up with a file was queued from another browser, When this viewer edits it, Then its text returns and Chat explains that the file must be added again", {
     timeout: 30_000,
 }, async () => {
     const queuedPrompt = "Summarize the attached notes";
@@ -208,8 +208,8 @@ test("Given a follow-up with a file was queued from another browser, When this v
     }
     const viewerForm = viewerComposer.form;
     await viewer.waitForView(() => expect(viewerComposer).toHaveProperty("value", queuedPrompt));
+    expect(viewerForm.querySelector('[aria-label="Attachments"]')).toBeNull();
     await viewer.waitForView(() =>
-        expect(getByRole(viewerForm, "list", { name: "Attachments" }).textContent).toContain("notes.txt"),
+        expect(document.body.textContent).toContain("Files attached to the queued message could not be restored here."),
     );
-    expect(document.body.textContent).not.toContain("Files attached to the queued message");
 });

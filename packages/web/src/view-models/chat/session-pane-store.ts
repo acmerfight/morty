@@ -5,7 +5,7 @@ import {
     MobiusPageRequest,
     MobiusPermissionResponseRequest,
     type MobiusSessionEventObserver,
-    type PromptResource,
+    type PromptAttachment,
     SESSION_CLOSED_ERROR_CODE,
     type SessionConfigOption,
 } from "@moxt-ai/mobius-sdk";
@@ -30,6 +30,7 @@ import { reportApplicationError } from "../report-error.ts";
 import type { QueuedDraftMessage } from "./conversation-creation-machine.ts";
 import { createBrowserFilePreviewStore } from "./file-preview-store.ts";
 import type { OpenMobiusSession } from "./open-session.ts";
+import { uploadPromptAttachment, uploadPromptAttachments } from "./prompt-attachment-upload.ts";
 import { type SessionActivityState, sameSessionActivity, workingCommandId } from "./session-activity-machine.ts";
 import {
     connectionFailure,
@@ -116,7 +117,7 @@ export interface SessionPaneStore {
     readonly historyRevision: number;
     readonly hasOlderHistory: boolean;
     readonly draft: string;
-    /** The composer holds an edited queued message whose files the Runtime did not report, so they were not restored. */
+    /** The composer holds an edited queued message whose attachment bytes were unavailable to this viewer. */
     readonly queuedFilesNotice: boolean;
     /**
      * Bumped after a user-submitted action that appends content (send, queue,
@@ -223,8 +224,7 @@ export function sessionPanePresentation(
             : {
                   commandId: unconfirmed.commandId,
                   displayPrompt: unconfirmed.displayPrompt,
-                  images: unconfirmed.request.images,
-                  resources: unconfirmed.request.resources,
+                  attachments: unconfirmed.attachments,
               };
     const activity = model.activity;
     const hasFailureCard =
@@ -473,23 +473,34 @@ export function createSessionPaneModel(options: {
     let queuedInitialSubmission: "waiting" | "submitted" =
         options.initialMessage === undefined ? "submitted" : "waiting";
     const instructionUri = "morty://bot/instructions";
-    const withInstructions = <T extends { readonly resources: readonly PromptResource[] }>(request: T): T => ({
-        ...request,
-        resources: [
-            ...request.resources.filter((resource) => resource.uri !== instructionUri),
-            ...((session.instructions ?? "").trim().length === 0
-                ? []
-                : [
-                      {
-                          mimeType: "text/plain",
-                          name: "Agent instructions",
-                          text: session.instructions ?? "",
-                          type: "embedded" as const,
-                          uri: instructionUri,
-                      },
-                  ]),
-        ],
-    });
+    const withInstructions = async <T extends { readonly attachments: readonly PromptAttachment[] }>(
+        request: T,
+        signal: AbortSignal,
+    ): Promise<T> => {
+        const instructions = (session.instructions ?? "").trim();
+        if (instructions.length === 0) {
+            return request;
+        }
+        if (client === null) {
+            throw new Error("The Session is not connected.");
+        }
+        const attachment = await uploadPromptAttachment(
+            client.sessions,
+            sessionId,
+            {
+                bytes: new TextEncoder().encode(instructions),
+                kind: "resource",
+                mediaType: "text/plain",
+                name: "Agent instructions",
+                uri: instructionUri,
+            },
+            signal,
+        );
+        return {
+            ...request,
+            attachments: [...request.attachments.filter((item) => item.uri !== instructionUri), attachment],
+        };
+    };
     const delivery = createSessionDeliveryStore({
         submit: noticingClosure(async (request, signal) => {
             if (client === null) {
@@ -497,12 +508,15 @@ export function createSessionPaneModel(options: {
             }
             return await client.turns.submit(
                 sessionId,
-                withInstructions({
-                    ...request,
-                    agentId: session.agentRef,
-                    directoryId: session.result.ready.directoryId,
-                    sessionConfigurations: sessionConfigurations(settings.getState().options),
-                }),
+                await withInstructions(
+                    {
+                        ...request,
+                        agentId: session.agentRef,
+                        directoryId: session.result.ready.directoryId,
+                        sessionConfigurations: sessionConfigurations(settings.getState().options),
+                    },
+                    signal,
+                ),
                 signal,
             );
         }),
@@ -549,11 +563,14 @@ export function createSessionPaneModel(options: {
                 }
                 return await client.turns.submit(
                     sessionId,
-                    withInstructions({
-                        ...request,
-                        agentId: session.agentRef,
-                        directoryId: session.result.ready.directoryId,
-                    }),
+                    await withInstructions(
+                        {
+                            ...request,
+                            agentId: session.agentRef,
+                            directoryId: session.result.ready.directoryId,
+                        },
+                        signal,
+                    ),
                     signal,
                 );
             }),
@@ -836,14 +853,7 @@ export function createSessionPaneModel(options: {
             const sent = turns.recordSent(commandId, Date.now());
             void centralIndexedDB.set(lastSentMessageEntry, sent, signal);
             const prompt = message.content.trim();
-            const displayPrompt =
-                prompt ||
-                attachments
-                    .map((attachment) =>
-                        attachment.kind === "image" ? attachment.image.name : attachment.resource.name,
-                    )
-                    .join(", ");
-            const images = attachments.flatMap((attachment) => (attachment.kind === "image" ? [attachment.image] : []));
+            const displayPrompt = prompt || attachments.map((attachment) => attachment.name).join(", ");
             if (!queued) {
                 // The draft leaves the composer for the submission.
                 centralSessionStorage.remove(draftEntry);
@@ -859,15 +869,23 @@ export function createSessionPaneModel(options: {
                 messages: pending.messages,
             });
             try {
+                if (client === null) {
+                    throw new Error("The Session is not connected.");
+                }
+                const uploadedAttachments = await uploadPromptAttachments(
+                    client.sessions,
+                    sessionId,
+                    attachments,
+                    signal,
+                );
                 const submission = {
                     ...request,
+                    attachments: uploadedAttachments,
                     content: prompt,
-                    images,
-                    resources: attachments.flatMap((attachment) =>
-                        attachment.kind === "resource" ? [attachment.resource] : [],
-                    ),
                 };
-                const outcome = await delivery.getState().submit(commandId, displayPrompt, submission, signal);
+                const outcome = await delivery
+                    .getState()
+                    .submit(commandId, displayPrompt, submission, attachments, signal);
                 signal.throwIfAborted();
                 switch (outcome.kind) {
                     case "accepted":
@@ -893,7 +911,12 @@ export function createSessionPaneModel(options: {
                 }
                 // The delivery store reports an accepted submission itself, as it reports any later confirmation.
                 if (outcome.kind === "delivery-unknown" && queued) {
-                    options.onInitialMessageUnconfirmed?.({ commandId, displayPrompt, request: submission });
+                    options.onInitialMessageUnconfirmed?.({
+                        attachments,
+                        commandId,
+                        displayPrompt,
+                        request: submission,
+                    });
                 }
                 if (outcome.kind === "accepted") {
                     updateTurn({ kind: "accepted", commandId, turnId: outcome.turn.turnId });
@@ -1505,11 +1528,7 @@ export function createSessionPaneModel(options: {
                     case "delivered":
                         break;
                     case "rejected": {
-                        const restoredAttachments = [
-                            ...pending.request.images.map((image) => ({ kind: "image" as const, image })),
-                            ...pending.request.resources.map((resource) => ({ kind: "resource" as const, resource })),
-                        ];
-                        composerAttachments.getState().restore(restoredAttachments);
+                        composerAttachments.getState().restore(pending.attachments);
                         centralSessionStorage.write(draftEntry, pending.request.content);
                         set({ draft: pending.request.content });
                         if (isQueuedInitialMessage(pending.commandId)) {
@@ -1540,27 +1559,26 @@ export function createSessionPaneModel(options: {
                     return;
                 }
                 const prompt = current.draft.trim();
-                const summary =
-                    prompt ||
-                    attachments
-                        .map((attachment) =>
-                            attachment.kind === "image" ? attachment.image.name : attachment.resource.name,
-                        )
-                        .join(", ");
+                const summary = prompt || attachments.map((attachment) => attachment.name).join(", ");
                 delivery.getState().dismissFailure();
+                if (client === null) {
+                    throw new Error("The Session is not connected.");
+                }
+                const uploadedAttachments = await uploadPromptAttachments(
+                    client.sessions,
+                    sessionId,
+                    attachments,
+                    signal,
+                );
                 const queued = await messageQueue.getState().enqueue(
                     running.commandId,
                     summary,
                     {
                         ...request,
+                        attachments: uploadedAttachments,
                         content: prompt,
-                        images: attachments.flatMap((attachment) =>
-                            attachment.kind === "image" ? [attachment.image] : [],
-                        ),
-                        resources: attachments.flatMap((attachment) =>
-                            attachment.kind === "resource" ? [attachment.resource] : [],
-                        ),
                     },
+                    attachments,
                     signal,
                 );
                 signal.throwIfAborted();
@@ -1599,14 +1617,12 @@ export function createSessionPaneModel(options: {
                           ? current
                           : `${removed.prompt}\n\n${current}`,
                 );
-                const restored: ComposerAttachment[] = [
-                    ...removed.images.map((image) => ({ kind: "image" as const, image })),
-                    ...(removed.files.kind === "reported"
-                        ? removed.files.resources.map((resource) => ({ kind: "resource" as const, resource }))
-                        : []),
-                ];
+                const restored: readonly ComposerAttachment[] =
+                    removed.attachments.kind === "restorable" ? removed.attachments.values : [];
                 composerAttachments.getState().restore([...restored, ...composerAttachments.getState().attachments]);
-                set({ queuedFilesNotice: removed.files.kind === "unreported" });
+                set({
+                    queuedFilesNotice: removed.attachments.kind === "unrestorable" && removed.attachments.count > 0,
+                });
             },
             configure: async (option, value, booleanValue, signal) => {
                 if (client === null || get().connection.kind !== "ready") {

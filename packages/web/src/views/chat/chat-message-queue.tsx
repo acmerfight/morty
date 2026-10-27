@@ -62,9 +62,9 @@ export function ChatMessageQueue({
                     <ol className="mb-0 flex max-h-[152px] w-full min-w-0 list-none flex-col gap-0 overflow-y-auto px-3 pt-1 pb-6 [scrollbar-color:transparent_transparent] [scrollbar-width:thin] hover:[scrollbar-color:var(--morty-fill-opacity-4)_transparent]">
                         {messages.map((message) => {
                             const pending = message.kind !== "queued";
-                            // Only files the Runtime did not report remain: nothing could return to the composer.
                             const editable =
-                                message.prompt !== "" || message.images.length > 0 || message.files.kind === "reported";
+                                message.prompt !== "" ||
+                                (message.attachments.kind === "restorable" && message.attachments.values.length > 0);
                             return (
                                 <li
                                     className="-mx-2 flex items-start gap-2 rounded-sm py-1.5 pr-2.5 pl-2 text-morty-text-2 transition-colors hover:bg-morty-fill-opacity-2"

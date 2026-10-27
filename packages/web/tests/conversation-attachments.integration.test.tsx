@@ -32,7 +32,7 @@ test("Given text and two images in one user message, When the conversation reloa
         const images = getAllByRole(message, "img", { name: "Your attachment" });
         expect(images).toHaveLength(2);
         const sources = images.map((image) => image.getAttribute("src"));
-        expect(sources.every((source) => source !== null)).toBe(true);
+        expect(sources.every((source) => source?.startsWith("blob:") === true)).toBe(true);
         expect(new Set(sources).size).toBe(2);
         return sources;
     });
@@ -42,9 +42,11 @@ test("Given text and two images in one user message, When the conversation reloa
         expect(getAllByRole(document.body, "article", { name: "Your message" })).toHaveLength(1);
         const message = getByRole(document.body, "article", { name: "Your message" });
         expect(message.textContent).toContain(prompt);
-        expect(
-            getAllByRole(message, "img", { name: "Your attachment" }).map((image) => image.getAttribute("src")),
-        ).toEqual(sources);
+        const reloadedSources = getAllByRole(message, "img", { name: "Your attachment" }).map((image) =>
+            image.getAttribute("src"),
+        );
+        expect(reloadedSources.every((source) => source?.startsWith("blob:") === true)).toBe(true);
+        expect(reloadedSources).not.toEqual(sources);
     });
     const followUp = "A separate message";
     await sendPrompt(reloaded, await reloaded.queryElementByTestId(dataTestId.messageComposer), followUp);
@@ -55,11 +57,10 @@ test("Given text and two images in one user message, When the conversation reloa
         expect(messages).toHaveLength(2);
         expect(messages[0]?.textContent).toContain(prompt);
         expect(messages[1]?.textContent).toContain(followUp);
-        expect(
-            getAllByRole(messages[0] ?? document.body, "img", { name: "Your attachment" }).map((image) =>
-                image.getAttribute("src"),
-            ),
-        ).toEqual(sources);
+        const reopenedSources = getAllByRole(messages[0] ?? document.body, "img", { name: "Your attachment" }).map(
+            (image) => image.getAttribute("src"),
+        );
+        expect(reopenedSources.every((source) => source?.startsWith("blob:") === true)).toBe(true);
         expect(queryByRole(messages[1] ?? document.body, "img", { name: "Your attachment" })).toBeNull();
     });
 });
@@ -90,6 +91,18 @@ test("Given the message composer, When the user clicks Add attachment and select
     );
     await app.user.click(getByRole(document.body, "button", { name: "Remove notes.json" }));
     expect(queryByRole(document.body, "list", { name: "Attachments" })).toBeNull();
+});
+
+test("Given an image larger than the former limit, When the user attaches it, Then the composer accepts it", {
+    timeout: 30_000,
+}, async () => {
+    const app = await createTestApp({ connectAgent: true });
+    await app.queryElementByTestId(dataTestId.messageComposer);
+    const input = getByLabelText(document.body, "Choose attachments");
+    await app.user.upload(input, new File([new Uint8Array(3_000_000)], "large-image.png", { type: "image/png" }));
+    await app.waitForView(() =>
+        expect(getByRole(document.body, "list", { name: "Attachments" }).textContent).toContain("large-image.png"),
+    );
 });
 
 test("Given an Agent is running, When the user reads an attachment and immediately stops output, Then cancellation remains available before the file read finishes", {
