@@ -206,10 +206,15 @@ export function createChatWorkspace(options: {
         onSelectionTargeted: (conversationId) => statuses.getState().selectionChanged(conversationId),
         url: options.url ?? window.location.href,
     });
-    const directory = createConversationDirectoryStore(botId, requests, (sessions) => {
-        statuses.getState().directoryLoaded(botId, sessions, statusLifetime.signal);
-        sidebar.dialogs.getState().nativeDialog?.getState().titlesChanged();
-    });
+    const directory = createConversationDirectoryStore(
+        botId,
+        requests,
+        (sessions) => {
+            statuses.getState().directoryLoaded(botId, sessions, statusLifetime.signal);
+            sidebar.dialogs.getState().nativeDialog?.getState().titlesChanged();
+        },
+        options.clock,
+    );
     const statuses = createConversationStatusStore(
         requests,
         (sessionId, reason) => {
@@ -567,6 +572,14 @@ export function createChatWorkspace(options: {
             }
         },
         start: () => {
+            void directory
+                .getState()
+                .followCalendar(operationsLifetime.signal)
+                .catch((cause: unknown) => {
+                    if (!operationsLifetime.signal.aborted) {
+                        reportApplicationError(cause, "conversation-calendar");
+                    }
+                });
             void options.computers?.refresh();
             startHomeLoad();
             startDirectoryLoad();
